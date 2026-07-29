@@ -53,6 +53,9 @@ Other observations about this route:
 - In the emulator, `pypkjs` does not proxy TCP for Alloy at all, so testing
   this route requires real hardware.
 
+A write-up ready to file against Moddable, including a suggested patch, is in
+[upstream/pebbleproxy-header-bug.md](upstream/pebbleproxy-header-bug.md).
+
 If Moddable fixes this, switching over is small: replace `relay.js` only —
 `lms.js` and the UI stay as they are.
 
