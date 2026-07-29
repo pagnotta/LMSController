@@ -1,0 +1,40 @@
+{
+  "name": "lmscontroller",
+  "author": "Patrick Heeren",
+  "version": "3.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "LMS Controller",
+    "uuid": "0f0f1356-cafe-4589-9255-596bd0849536",
+    "projectType": "moddable",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery",
+      "gabbro"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "messageKeys": [
+      "RQ_ID",
+      "RQ_OP",
+      "RQ_ARG",
+      "RS_ID",
+      "RS_ERR",
+      "RS_DATA"
+    ],
+    "resources": {
+      "media": [
+        {
+          "type": "png",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/icon.png",
+          "menuIcon": true
+        }
+      ]
+    }
+  }
+}
