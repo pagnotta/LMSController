@@ -93,6 +93,7 @@ class PlayerListBehavior extends Behavior {
 	}
 
 	onPressUp(column) {
+		this.move(column, -1);
 		if (this.view === "status") {
 			this.loadPlayers(column);
 		} else if (this.view === "menu") {
@@ -110,6 +111,7 @@ class PlayerListBehavior extends Behavior {
 	}
 
 	onPressDown(column) {
+		this.move(column, 1);
 		if (this.view === "status") {
 		} else if (this.view === "menu") {
 			if (this.menuItems.length > 0 && !this.loadingMenu) {
