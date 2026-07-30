@@ -93,41 +93,36 @@ class PlayerListBehavior extends Behavior {
 	}
 
 	onPressUp(column) {
-		if (this.view === "list") {
-			this.move(column, -1);
-		} else if (this.view === "status") {
-			lms.command(this.currentPlayerId, "mixer volume +5").then(() => this.refreshStatus(column));
+		if (this.view === "status") {
+			this.loadPlayers(column);
 		} else if (this.view === "menu") {
-			if (this.menuSelected > 0) {
-				this.menuSelected--;
-				this.marqueeTick = 0;
-				this.lastMarqueeOffset = -1;
-				this.paintMenu(column);
-			}
-		}
-		return true;
-	}
-
-	onPressDown(column) {
-		if (this.view === "list") {
-			this.move(column, +1);
-		} else if (this.view === "status") {
-			lms.command(this.currentPlayerId, "mixer volume -5").then(() => this.refreshStatus(column));
-		} else if (this.view === "menu") {
-			if (this.menuSelected < this.menuItems.length - 1) {
-				this.menuSelected++;
-				this.marqueeTick = 0;
-				this.lastMarqueeOffset = -1;
-				this.paintMenu(column);
-				// Lazy load next chunk if we approach the end
-				if (this.menuSelected >= this.menuItems.length - 2) {
-					if (!this.loadingMenu) {
-						this.loadMenu(column, this.menuItems.length, this.currentReqType, this.currentReqId);
-					}
+			if (this.menuSelected > 0 && !this.loadingMenu) {
+				if (this.menuSelected > this.menuStart) {
+					this.menuSelected--;
+					this.paintMenu(column);
+				} else {
+					this.menuSelected--;
+					this.paintMenu(column);
+					this.loadMenu(column, Math.max(0, this.menuStart - 10), this.currentReqType, this.currentReqId);
 				}
 			}
 		}
-		return true;
+	}
+
+	onPressDown(column) {
+		if (this.view === "status") {
+		} else if (this.view === "menu") {
+			if (this.menuItems.length > 0 && !this.loadingMenu) {
+				if (this.menuSelected < this.menuStart + this.menuItems.length - 1) {
+					this.menuSelected++;
+					this.paintMenu(column);
+				} else if (!this.menuAtEnd) {
+					this.menuSelected++;
+					this.paintMenu(column);
+					this.loadMenu(column, this.menuStart + this.menuItems.length, this.currentReqType, this.currentReqId);
+				}
+			}
+		}
 	}
 
 	onPressSelect(column) {
@@ -146,8 +141,8 @@ class PlayerListBehavior extends Behavior {
 			this.view = "menu";
 			this.loadMenu(column, 0, "node", "home");
 		} else if (this.view === "menu") {
-			const item = this.menuItems[this.menuSelected];
-			if (item) {
+			const item = this.menuItems[this.menuSelected - this.menuStart];
+			if (item && !this.loadingMenu) {
 				if (item.isFolder) {
 					this.menuHistory.push({ start: this.menuStart, selected: this.menuSelected, items: this.menuItems, reqType: this.currentReqType, reqId: this.currentReqId });
 					this.menuStart = 0;
@@ -189,10 +184,17 @@ class PlayerListBehavior extends Behavior {
 		this.loadingMenu = true;
 		lms.menu(this.currentPlayerId, start, 10, reqType, reqId).then(items => {
 			this.loadingMenu = false;
-			if (start === 0) {
+			if (items.length > 0 || start === 0) {
+				this.menuStart = start;
 				this.menuItems = items;
-			} else if (items.length > 0) {
-				this.menuItems = this.menuItems.concat(items);
+				this.menuAtEnd = items.length < 10;
+				if (this.menuSelected < this.menuStart) this.menuSelected = this.menuStart;
+				if (this.menuSelected >= this.menuStart + items.length && items.length > 0) this.menuSelected = this.menuStart + items.length - 1;
+			} else {
+				this.menuAtEnd = true;
+				if (this.menuSelected >= this.menuStart + this.menuItems.length) {
+					this.menuSelected = this.menuStart + this.menuItems.length - 1;
+				}
 			}
 			this.lastMarqueeOffset = -1;
 			this.paintMenu(column);
@@ -210,7 +212,7 @@ class PlayerListBehavior extends Behavior {
 		}
 		const windowSize = Math.floor(metrics.pixels / metrics.rowHeight) || 6;
 		let startIdx = Math.max(0, this.menuSelected - Math.floor(windowSize / 2));
-		let endIdx = Math.min(this.menuItems.length, startIdx + windowSize);
+		let endIdx = Math.min(this.menuStart + this.menuItems.length, startIdx + windowSize);
 		if (endIdx - startIdx < windowSize) {
 			startIdx = Math.max(0, endIdx - windowSize);
 		}
@@ -218,7 +220,8 @@ class PlayerListBehavior extends Behavior {
 		let comp = column.first;
 		for (let i = startIdx; i < endIdx; i++) {
 			let isSelected = i === this.menuSelected;
-			let item = this.menuItems[i];
+			let item = this.menuItems[i - this.menuStart];
+			if (!item) continue;
 			let text = (item.isFolder ? "> " : "") + item.text;
 			if (text.length > 14) text = text.substring(0, 14);
 			
