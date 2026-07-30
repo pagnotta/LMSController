@@ -78,31 +78,80 @@ class PlayerListBehavior extends Behavior {
 	}
 
 	onPressUp(column) {
-		this.move(column, -1);
+		if (this.view === "list") {
+			this.move(column, -1);
+		} else if (this.view === "status") {
+			lms.command(this.currentPlayerId, "mixer volume +5").then(() => this.refreshStatus(column));
+		}
 		return true;
 	}
 
 	onPressDown(column) {
-		this.move(column, +1);
+		if (this.view === "list") {
+			this.move(column, +1);
+		} else if (this.view === "status") {
+			lms.command(this.currentPlayerId, "mixer volume -5").then(() => this.refreshStatus(column));
+		}
 		return true;
 	}
 
 	onPressSelect(column) {
 		if (this.view === "list" && this.players.length) {
 			const player = this.players[this.selected];
+			this.currentPlayerId = player.id;
 			this.view = "status";
 			fill(column, [player.name, "loading..."], -1);
-			lms.status(player.id)
-				.then((s) => {
-					fill(column, [
-						s.artist || "(no artist)",
-						s.title || "(no title)",
-						(s.playing ? "playing" : "paused") + "  Vol " + s.volume,
-					], -1);
-				})
-				.catch((e) => fill(column, ["Error", String(e.message || e).slice(0, 24)], -1));
+			this.refreshStatus(column);
+		} else if (this.view === "status") {
+			// Select Button in status view acts as Play/Pause
+			lms.command(this.currentPlayerId, "pause").then(() => this.refreshStatus(column));
 		}
 		return true;
+	}
+
+	refreshStatus(column) {
+		if (this.view !== "status") return;
+		lms.status(this.currentPlayerId)
+			.then((s) => {
+				fill(column, [
+					s.artist || "(no artist)",
+					s.title || "(no title)",
+					(s.playing ? "playing" : "paused") + "  Vol " + s.volume,
+				], -1);
+			})
+			.catch((e) => fill(column, ["Error", String(e.message || e).slice(0, 24)], -1));
+	}
+
+	onTouchBegan(column, id, x, y, ticks) {
+		this.startX = x;
+		this.startY = y;
+	}
+
+	onTouchEnded(column, id, x, y, ticks) {
+		if (this.view !== "status") return;
+		const dx = x - this.startX;
+		const dy = y - this.startY;
+		
+		let cmd = null;
+		if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 30) {
+			cmd = (dx > 0) ? "button jump_rew" : "button jump_fwd";
+		} else if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 30) {
+			cmd = (dy > 0) ? "mixer volume -5" : "mixer volume +5";
+		} else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+			cmd = "pause"; // Tap
+		}
+
+		if (cmd) {
+			lms.command(this.currentPlayerId, cmd).then(() => {
+				// Refresh status after a short delay so the server state updates
+				column.duration = 500;
+				column.start();
+			});
+		}
+	}
+
+	onFinished(column) {
+		this.refreshStatus(column);
 	}
 
 	onPressBack(column) {

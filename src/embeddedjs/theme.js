@@ -15,33 +15,33 @@ import {} from "piu/MC";
 export const round = screen.width === screen.height;
 
 export const skins = {
-	background: new Skin({ fill: "white" }),
-	highlight: new Skin({ fill: "black" }),
-	bar: new Skin({ fill: "black" }),
+	background: new Skin({ fill: "black" }),
+	highlight: new Skin({ fill: "blue" }),
+	bar: new Skin({ fill: "#222222" }),
 };
 
 export const styles = {
 	item: new Style({
-		font: "24px Gothic",
-		color: "black",
+		font: "21px Roboto",
+		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	itemSelected: new Style({
-		font: "bold 24px Gothic",
+		font: "bold 21px Roboto",
 		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	title: new Style({
-		font: "bold 18px Gothic",
+		font: "bold 21px Roboto",
 		color: "white",
 		horizontal: "center",
 		vertical: "middle",
 	}),
 	hint: new Style({
-		font: "18px Gothic",
-		color: "black",
+		font: "21px Roboto",
+		color: "gray",
 		horizontal: "center",
 		vertical: "middle",
 	}),
