@@ -9,6 +9,11 @@
  * Protocol: see src/embeddedjs/relay.js
  */
 
+var Clay = require('pebble-clay');
+var clayConfig = require('./config.json');
+var customClay = new Clay(clayConfig, null, { autoHandleEvents: false });
+
+
 var RECORD = "\u001e";
 var FIELD = "\u001f";
 
@@ -163,8 +168,24 @@ Pebble.addEventListener("appmessage", function (e) {
   handle(p.RQ_ID, p.RQ_OP, p.RQ_ARG || "");
 });
 
-// Configuration page not implemented yet. Until then DEFAULTS above and
-// localStorage["lms"] on the phone apply.
-Pebble.addEventListener("showConfiguration", function () {
-  console.log("no configuration page yet, current server: " + baseUrl());
+// Configuration page via Clay
+Pebble.addEventListener('showConfiguration', function(e) {
+  Pebble.openURL(customClay.generateUrl());
+});
+
+Pebble.addEventListener('webviewclosed', function(e) {
+  if (e && !e.response) {
+    return;
+  }
+  var dict = customClay.getSettings(e.response, false);
+  
+  // Save settings to localStorage
+  settings.protocol = dict.protocol.value;
+  settings.host = dict.host.value;
+  settings.port = dict.port.value;
+  settings.user = dict.user.value;
+  settings.password = dict.password.value;
+  
+  localStorage.setItem("lms", JSON.stringify(settings));
+  console.log("Settings updated. New server: " + baseUrl());
 });

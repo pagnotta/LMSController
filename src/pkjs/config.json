@@ -1,0 +1,76 @@
+[
+  {
+    "type": "heading",
+    "defaultValue": "LMS Controller Settings"
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Server Configuration"
+      },
+      {
+        "type": "select",
+        "messageKey": "protocol",
+        "defaultValue": "http",
+        "label": "Protocol",
+        "options": [
+          { "label": "HTTP", "value": "http" },
+          { "label": "HTTPS", "value": "https" }
+        ]
+      },
+      {
+        "type": "input",
+        "messageKey": "host",
+        "defaultValue": "192.168.178.85",
+        "label": "Hostname or IP",
+        "attributes": {
+          "placeholder": "e.g. 192.168.1.100"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "port",
+        "defaultValue": "9000",
+        "label": "Port",
+        "attributes": {
+          "type": "number",
+          "placeholder": "9000"
+        }
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
+        "defaultValue": "Authentication (Optional)"
+      },
+      {
+        "type": "input",
+        "messageKey": "user",
+        "defaultValue": "",
+        "label": "Username",
+        "attributes": {
+          "placeholder": "Username"
+        }
+      },
+      {
+        "type": "input",
+        "messageKey": "password",
+        "defaultValue": "",
+        "label": "Password",
+        "attributes": {
+          "type": "password",
+          "placeholder": "Password"
+        }
+      }
+    ]
+  },
+  {
+    "type": "submit",
+    "defaultValue": "Save Settings"
+  }
+]

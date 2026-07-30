@@ -2,9 +2,10 @@
   "name": "lmscontroller",
   "author": "Patrick Heeren",
   "version": "3.0.0",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
-  "dependencies": {},
   "pebble": {
     "displayName": "LMS Controller",
     "uuid": "0f0f1356-cafe-4589-9255-596bd0849536",
@@ -12,8 +13,7 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [
-      "emery",
-      "gabbro"
+      "emery"
     ],
     "watchapp": {
       "watchface": false
@@ -36,5 +36,8 @@
         }
       ]
     }
+  },
+  "dependencies": {
+    "pebble-clay": "^1.0.4"
   }
 }
