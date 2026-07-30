@@ -181,6 +181,6 @@ const LMSApplication = Application.template(($) => ({
 }));
 
 export default new LMSApplication(null, {
-	touchCount: 0,
+	touchCount: 1,
 	pixels: screen.width * 4,
 });
