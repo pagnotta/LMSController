@@ -107,7 +107,19 @@ export function init() {
 export function call(op, arg = "") {
 	return new Promise((resolve, reject) => {
 		const id = nextId++;
-		pending.set(id, { resolve, reject });
+		
+		// Add a timeout to prevent memory leaks if the phone never replies
+		const timer = setTimeout(() => {
+			if (pending.has(id)) {
+				pending.delete(id);
+				reject(new Error("Timeout waiting for phone"));
+			}
+		}, 10000);
+		
+		pending.set(id, { 
+			resolve: (res) => { clearTimeout(timer); resolve(res); },
+			reject: (err) => { clearTimeout(timer); reject(err); }
+		});
 
 		const m = new Map();
 		m.set("RQ_ID", id);

@@ -209,7 +209,9 @@ function handle(id, op, arg) {
             }
             // already extracted
             var out = [];
-            for (var i = 0; i < loop.length; i++) { // LMS already sliced it using start/limit
+            // Force slice to prevent huge memory allocations if plugin ignores start/limit
+            var sliceStart = loop.length > limit ? start : 0;
+            for (var i = sliceStart; i < sliceStart + limit && i < loop.length; i++) {
                 var item = loop[i];
                 var itemId = item.id || ("_" + reqId + "_" + i);
                 cachedMenu[itemId] = item;
