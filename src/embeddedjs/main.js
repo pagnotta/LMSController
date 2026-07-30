@@ -215,56 +215,25 @@ class PlayerListBehavior extends Behavior {
 			startIdx = Math.max(0, endIdx - windowSize);
 		}
 		
-		const texts = [];
-		for (let i = startIdx; i < endIdx; i++) {
-			const item = this.menuItems[i];
-			let text = (item.isFolder ? "> " : "") + item.text;
-			// Only truncate here, animation happens in updateMarquee
-			if (i === this.menuSelected && text.length > 14) {
-				text = text.substring(0, 14);
-			}
-			texts.push(text);
-		}
-		fill(column, texts, this.menuSelected - startIdx);
-	}
-
-	updateMarquee(column) {
-		if (this.view !== "menu") return;
-		const item = this.menuItems[this.menuSelected];
-		if (!item) return;
-		
-		let text = (item.isFolder ? "> " : "") + item.text;
-		if (text.length <= 14) return;
-		
-		const over = text.length - 14;
-		const tick = Math.floor(this.marqueeTick || 0);
-		const phase = tick % (over * 2 + 8);
-		let offset = 0;
-		if (phase > 4 && phase <= 4 + over) {
-			offset = phase - 4;
-		} else if (phase > 4 + over && phase <= 4 + over * 2) {
-			offset = (4 + over * 2) - phase;
-		}
-		
-		if (this.lastMarqueeOffset === offset) return;
-		this.lastMarqueeOffset = offset;
-		
-		text = text.substring(offset);
-		
-		const windowSize = Math.floor(metrics.pixels / metrics.rowHeight) || 6;
-		let startIdx = Math.max(0, this.menuSelected - Math.floor(windowSize / 2));
-		let endIdx = Math.min(this.menuItems.length, startIdx + windowSize);
-		if (endIdx - startIdx < windowSize) {
-			startIdx = Math.max(0, endIdx - windowSize);
-		}
-		
-		const selectedIndexInColumn = this.menuSelected - startIdx;
 		let comp = column.first;
-		for (let i = 0; i < selectedIndexInColumn; i++) {
-			if (comp) comp = comp.next;
+		for (let i = startIdx; i < endIdx; i++) {
+			let isSelected = i === this.menuSelected;
+			let item = this.menuItems[i];
+			let text = (item.isFolder ? "> " : "") + item.text;
+			if (text.length > 14) text = text.substring(0, 14);
+			
+			if (comp) {
+				comp.string = text;
+				comp.skin = isSelected ? skins.highlight : skins.background;
+				comp.style = isSelected ? styles.itemSelected : styles.item;
+				comp = comp.next;
+			} else {
+				column.add(row(text, isSelected));
+			}
 		}
-		if (comp) {
-			comp.string = text;
+		let count = endIdx - startIdx;
+		while (column.length > count) {
+			column.remove(column.last);
 		}
 	}
 
@@ -298,11 +267,6 @@ class PlayerListBehavior extends Behavior {
 		if (this.statusRefreshTime && Date.now() >= this.statusRefreshTime) {
 			this.statusRefreshTime = 0;
 			this.refreshStatus(column);
-		}
-		
-		if (this.view === "menu" && this.menuItems.length) {
-			this.marqueeTick = (this.marqueeTick || 0) + 1;
-			this.updateMarquee(column);
 		}
 	}
 

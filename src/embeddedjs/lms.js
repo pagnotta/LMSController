@@ -65,10 +65,26 @@ export function command(id, cmd) {
 export function menu(id, start, limit, reqType, reqId) {
 	return call("menu", [id, start, limit, reqType, reqId].join(FIELD)).then((data) => {
 		if (!data) return [];
-		return data.split(RECORD).map((record) => {
-			const [text, itemId, folderType] = record.split(FIELD);
-			return { text, id: itemId, isFolder: folderType !== "0", folderType };
-		});
+		const result = [];
+		let i = 0;
+		while (i < data.length) {
+			let nextRecord = data.indexOf(RECORD, i);
+			if (nextRecord === -1) nextRecord = data.length;
+			let record = data.substring(i, nextRecord);
+			let f1 = record.indexOf(FIELD);
+			let f2 = record.indexOf(FIELD, f1 + 1);
+			if (f1 !== -1 && f2 !== -1) {
+				const folderType = record.substring(f2 + 1);
+				result.push({
+					text: record.substring(0, f1),
+					id: record.substring(f1 + 1, f2),
+					folderType: folderType,
+					isFolder: folderType !== "0"
+				});
+			}
+			i = nextRecord + 1;
+		}
+		return result;
 	});
 }
 
