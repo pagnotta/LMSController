@@ -9,7 +9,7 @@
  * Protocol: see src/embeddedjs/relay.js
  */
 
-var Clay = require('pebble-clay');
+var Clay = require('@rebble/clay');
 var clayConfig = require('./config.json');
 var customClay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
