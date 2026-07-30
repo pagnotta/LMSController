@@ -122,7 +122,7 @@ class PlayerListBehavior extends Behavior {
 				// Lazy load next chunk if we approach the end
 				if (this.menuSelected >= this.menuItems.length - 2) {
 					if (!this.loadingMenu) {
-						this.loadMenu(column, this.menuItems.length, this.currentMenuParams);
+						this.loadMenu(column, this.menuItems.length, this.currentReqType, this.currentReqId);
 					}
 				}
 			}
@@ -144,21 +144,19 @@ class PlayerListBehavior extends Behavior {
 			this.menuItems = [];
 			this.menuSelected = 0;
 			this.view = "menu";
-			this.loadMenu(column, 0, "direct:1");
+			this.loadMenu(column, 0, "node", "home");
 		} else if (this.view === "menu") {
 			const item = this.menuItems[this.menuSelected];
 			if (item) {
 				if (item.isFolder) {
-					this.menuHistory.push({ start: this.menuStart, selected: this.menuSelected, items: this.menuItems, params: this.currentMenuParams });
+					this.menuHistory.push({ start: this.menuStart, selected: this.menuSelected, items: this.menuItems, reqType: this.currentReqType, reqId: this.currentReqId });
 					this.menuStart = 0;
 					this.menuSelected = 0;
 					this.menuItems = [];
 					this.marqueeTick = 0;
 					this.lastMarqueeOffset = -1;
 					fill(column, ["loading..."], -1);
-					lms.menuGo(this.currentPlayerId, item.id).then(() => {
-						this.loadMenu(column, 0, "item_id:" + item.id);
-					});
+					this.loadMenu(column, 0, "cmd", item.id);
 				} else {
 					// Execute Play action
 					fill(column, ["playing..."], -1);
@@ -185,10 +183,11 @@ class PlayerListBehavior extends Behavior {
 			.catch((e) => fill(column, ["Error", String(e.message || e).slice(0, 24)], -1));
 	}
 
-	loadMenu(column, start, params) {
-		this.currentMenuParams = params;
+	loadMenu(column, start, reqType, reqId) {
+		this.currentReqType = reqType;
+		this.currentReqId = reqId;
 		this.loadingMenu = true;
-		lms.menu(this.currentPlayerId, start, 10, params).then(items => {
+		lms.menu(this.currentPlayerId, start, 10, reqType, reqId).then(items => {
 			this.loadingMenu = false;
 			if (start === 0) {
 				this.menuItems = items;
@@ -300,7 +299,7 @@ class PlayerListBehavior extends Behavior {
 		
 		if (this.view === "menu" && this.menuItems.length) {
 			this.marqueeTick = (this.marqueeTick || 0) + 1;
-			// this.updateMarquee(column);
+			this.updateMarquee(column);
 		}
 	}
 
@@ -311,7 +310,8 @@ class PlayerListBehavior extends Behavior {
 				this.menuStart = state.start;
 				this.menuSelected = state.selected;
 				this.menuItems = state.items;
-				this.currentMenuParams = state.params;
+				this.currentReqType = state.reqType;
+				this.currentReqId = state.reqId;
 				this.marqueeTick = 0;
 				this.lastMarqueeOffset = -1;
 				this.paintMenu(column);

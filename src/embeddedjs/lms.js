@@ -58,11 +58,12 @@ export function command(id, cmd) {
  * @param {string} id player MAC
  * @param {number} start index
  * @param {number} limit max items
- * @param {string} params optional string e.g. "direct:1"
+ * @param {string} reqType "node" or "cmd"
+ * @param {string} reqId e.g. "home" or itemId
  * @returns {Promise<Array<{text: string, id: string, isFolder: boolean}>>}
  */
-export function menu(id, start, limit, params = "") {
-	return call("menu", [id, start, limit, params].join(FIELD)).then((data) => {
+export function menu(id, start, limit, reqType, reqId) {
+	return call("menu", [id, start, limit, reqType, reqId].join(FIELD)).then((data) => {
 		if (!data) return [];
 		return data.split(RECORD).map((record) => {
 			const [text, itemId, isFolder] = record.split(FIELD);

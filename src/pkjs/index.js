@@ -23,6 +23,7 @@ var MAX_DATA = 512;
 
 var cachedMenu = {}; // maps itemId -> full LMS item object
 
+
 var DEFAULTS = {
   protocol: "http",
   host: "192.168.178.85",
@@ -155,31 +156,67 @@ function handle(id, op, arg) {
     var player = parts[0];
     var start = parseInt(parts[1], 10) || 0;
     var limit = parseInt(parts[2], 10) || 10;
-    var paramsStr = parts[3]; // e.g. "direct:1"
+    var reqType = parts[3] || "node"; // "node" or "cmd"
+    var reqId = parts[4] || "home";
     
-    var req = ["menu", start, limit];
-    if (paramsStr) {
-       req = req.concat(paramsStr.split(" "));
+    if (reqType === "node") {
+        rpc(player, ["menu", 0, 999, "direct:1"], function(err, json) {
+            if (err || !json.result || !json.result.item_loop) {
+                reply(id, err || "no items", "");
+                return;
+            }
+            var loop = json.result.item_loop.filter(function(i) { return i.node === reqId; });
+            var out = [];
+            for (var i = start; i < start + limit && i < loop.length; i++) {
+                var item = loop[i];
+                var itemId = item.id || ("_" + reqId + "_" + i);
+                cachedMenu[itemId] = item;
+                
+                var isFolder = (item.isANode || (item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") ? "1" : "0";
+                var text = (item.text || "?").substring(0, 30);
+                out.push([text, itemId, isFolder].join(FIELD));
+            }
+            reply(id, "", out.join(RECORD));
+        });
+    } else if (reqType === "cmd") {
+        var parentItem = cachedMenu[reqId];
+        if (!parentItem) {
+            reply(id, "parent not found", "");
+            return;
+        }
+        var req = [];
+        if (parentItem.actions && parentItem.actions.go) {
+            req = parentItem.actions.go.cmd.slice();
+            req.push(start, limit);
+            if (parentItem.actions.go.params) {
+                for (var key in parentItem.actions.go.params) {
+                    req.push(key + ":" + parentItem.actions.go.params[key]);
+                }
+            }
+        }
+        if (!req.length) {
+            reply(id, "no cmd", "");
+            return;
+        }
+        rpc(player, req, function(err, json) {
+            if (err || !json.result || !json.result.item_loop) {
+                reply(id, err || "no items", "");
+                return;
+            }
+            var loop = json.result.item_loop;
+            var out = [];
+            for (var i = 0; i < loop.length; i++) { // LMS already sliced it using start/limit
+                var item = loop[i];
+                var itemId = item.id || ("_" + reqId + "_" + i);
+                cachedMenu[itemId] = item;
+                
+                var isFolder = ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") ? "1" : "0";
+                var text = (item.text || "?").substring(0, 30);
+                out.push([text, itemId, isFolder].join(FIELD));
+            }
+            reply(id, "", out.join(RECORD));
+        });
     }
-    
-    rpc(player, req, function (err, json) {
-      if (err || !json.result || !json.result.item_loop) {
-        reply(id, err || "no items", "");
-        return;
-      }
-      var loop = json.result.item_loop;
-      var out = [];
-      for (var i = 0; i < loop.length; i++) {
-        var item = loop[i];
-        var itemId = item.id || ("_" + start + "_" + i);
-        cachedMenu[itemId] = item;
-        
-        var isFolder = (item.actions && item.actions.go) ? "1" : "0";
-        var text = (item.text || "?").substring(0, 30); // trim to save bytes
-        out.push([text, itemId, isFolder].join(FIELD));
-      }
-      reply(id, "", out.join(RECORD));
-    });
     return;
   }
 
