@@ -82,6 +82,11 @@ class PlayerListBehavior extends Behavior {
 			this.move(column, -1);
 		} else if (this.view === "status") {
 			lms.command(this.currentPlayerId, "mixer volume +5").then(() => this.refreshStatus(column));
+		} else if (this.view === "menu") {
+			if (this.menuSelected > 0) {
+				this.menuSelected--;
+				this.paintMenu(column);
+			}
 		}
 		return true;
 	}
@@ -91,6 +96,17 @@ class PlayerListBehavior extends Behavior {
 			this.move(column, +1);
 		} else if (this.view === "status") {
 			lms.command(this.currentPlayerId, "mixer volume -5").then(() => this.refreshStatus(column));
+		} else if (this.view === "menu") {
+			if (this.menuSelected < this.menuItems.length - 1) {
+				this.menuSelected++;
+				this.paintMenu(column);
+				// Lazy load next chunk if we approach the end
+				if (this.menuSelected >= this.menuItems.length - 2) {
+					if (!this.loadingMenu) {
+						this.loadMenu(column, this.menuItems.length, this.currentMenuParams);
+					}
+				}
+			}
 		}
 		return true;
 	}
@@ -103,8 +119,34 @@ class PlayerListBehavior extends Behavior {
 			fill(column, [player.name, "loading..."], -1);
 			this.refreshStatus(column);
 		} else if (this.view === "status") {
-			// Select Button in status view acts as Play/Pause
-			lms.command(this.currentPlayerId, "pause").then(() => this.refreshStatus(column));
+			// Select Button in status view opens the LMS Menu
+			this.menuHistory = [];
+			this.menuStart = 0;
+			this.menuItems = [];
+			this.menuSelected = 0;
+			this.view = "menu";
+			this.loadMenu(column, 0, "direct:1");
+		} else if (this.view === "menu") {
+			const item = this.menuItems[this.menuSelected];
+			if (item) {
+				if (item.isFolder) {
+					this.menuHistory.push({ start: this.menuStart, selected: this.menuSelected, items: this.menuItems, params: this.currentMenuParams });
+					this.menuStart = 0;
+					this.menuSelected = 0;
+					this.menuItems = [];
+					fill(column, ["loading..."], -1);
+					lms.menuGo(this.currentPlayerId, item.id).then(() => {
+						this.loadMenu(column, 0, "item_id:" + item.id);
+					});
+				} else {
+					// Execute Play action
+					fill(column, ["playing..."], -1);
+					lms.menuGo(this.currentPlayerId, item.id).then(() => {
+						this.view = "status";
+						this.refreshStatus(column);
+					});
+				}
+			}
 		}
 		return true;
 	}
@@ -120,6 +162,41 @@ class PlayerListBehavior extends Behavior {
 				], -1);
 			})
 			.catch((e) => fill(column, ["Error", String(e.message || e).slice(0, 24)], -1));
+	}
+
+	loadMenu(column, start, params) {
+		this.currentMenuParams = params;
+		this.loadingMenu = true;
+		lms.menu(this.currentPlayerId, start, 10, params).then(items => {
+			this.loadingMenu = false;
+			if (start === 0) {
+				this.menuItems = items;
+			} else if (items.length > 0) {
+				this.menuItems = this.menuItems.concat(items);
+			}
+			this.paintMenu(column);
+		});
+	}
+
+	paintMenu(column) {
+		if (this.view !== "menu") return;
+		if (!this.menuItems.length) {
+			fill(column, ["Empty"], -1);
+			return;
+		}
+		const windowSize = Math.floor(metrics.pixels / metrics.rowHeight) || 6;
+		let startIdx = Math.max(0, this.menuSelected - Math.floor(windowSize / 2));
+		let endIdx = Math.min(this.menuItems.length, startIdx + windowSize);
+		if (endIdx - startIdx < windowSize) {
+			startIdx = Math.max(0, endIdx - windowSize);
+		}
+		
+		column.empty();
+		for (let i = startIdx; i < endIdx; i++) {
+			const item = this.menuItems[i];
+			const text = (item.isFolder ? "> " : "") + item.text;
+			column.add(row(text, i === this.menuSelected));
+		}
 	}
 
 	onTouchBegan(column, id, x, y, ticks) {
@@ -155,10 +232,23 @@ class PlayerListBehavior extends Behavior {
 	}
 
 	onPressBack(column) {
-		if (this.view !== "list") {
+		if (this.view === "menu") {
+			if (this.menuHistory.length > 0) {
+				const state = this.menuHistory.pop();
+				this.menuStart = state.start;
+				this.menuSelected = state.selected;
+				this.menuItems = state.items;
+				this.currentMenuParams = state.params;
+				this.paintMenu(column);
+			} else {
+				this.view = "status";
+				this.refreshStatus(column);
+			}
+			return true;
+		} else if (this.view === "status") {
 			this.view = "list";
 			this.paint(column);
-			return true; // swallow Back so the app does not close
+			return true; 
 		}
 		return false; // in the list, Back closes the app as usual
 	}

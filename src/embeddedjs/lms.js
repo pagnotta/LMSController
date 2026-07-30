@@ -53,3 +53,30 @@ export function status(id) {
 export function command(id, cmd) {
 	return call("cmd", id + FIELD + cmd);
 }
+/**
+ * Fetch a chunk of menu items.
+ * @param {string} id player MAC
+ * @param {number} start index
+ * @param {number} limit max items
+ * @param {string} params optional string e.g. "direct:1"
+ * @returns {Promise<Array<{text: string, id: string, isFolder: boolean}>>}
+ */
+export function menu(id, start, limit, params = "") {
+	return call("menu", [id, start, limit, params].join(FIELD)).then((data) => {
+		if (!data) return [];
+		return data.split(RECORD).map((record) => {
+			const [text, itemId, isFolder] = record.split(FIELD);
+			return { text, id: itemId, isFolder: isFolder === "1" };
+		});
+	});
+}
+
+/**
+ * Execute a menu action (drill down or play).
+ * @param {string} playerId
+ * @param {string} itemId
+ * @returns {Promise<string>}
+ */
+export function menuGo(playerId, itemId) {
+	return call("menu_go", playerId + FIELD + itemId);
+}

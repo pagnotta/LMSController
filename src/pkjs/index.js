@@ -21,6 +21,8 @@ var FIELD = "\u001f";
 // need a chunking extension to the protocol.
 var MAX_DATA = 512;
 
+var cachedMenu = {}; // maps itemId -> full LMS item object
+
 var DEFAULTS = {
   protocol: "http",
   host: "192.168.178.85",
@@ -145,6 +147,77 @@ function handle(id, op, arg) {
       return;
     }
     rpc(player, words, function (err) { reply(id, err, "ok"); });
+    return;
+  }
+
+  if (op === "menu") {
+    var parts = String(arg).split(FIELD);
+    var player = parts[0];
+    var start = parseInt(parts[1], 10) || 0;
+    var limit = parseInt(parts[2], 10) || 10;
+    var paramsStr = parts[3]; // e.g. "direct:1"
+    
+    var req = ["menu", start, limit];
+    if (paramsStr) {
+       req = req.concat(paramsStr.split(" "));
+    }
+    
+    rpc(player, req, function (err, json) {
+      if (err || !json.result || !json.result.item_loop) {
+        reply(id, err || "no items", "");
+        return;
+      }
+      var loop = json.result.item_loop;
+      var out = [];
+      for (var i = 0; i < loop.length; i++) {
+        var item = loop[i];
+        var itemId = item.id || ("_" + start + "_" + i);
+        cachedMenu[itemId] = item;
+        
+        var isFolder = (item.actions && item.actions.go) ? "1" : "0";
+        var text = (item.text || "?").substring(0, 30); // trim to save bytes
+        out.push([text, itemId, isFolder].join(FIELD));
+      }
+      reply(id, "", out.join(RECORD));
+    });
+    return;
+  }
+
+  if (op === "menu_go") {
+    var parts = String(arg).split(FIELD);
+    var player = parts[0];
+    var itemId = parts[1];
+    var item = cachedMenu[itemId];
+    
+    if (!item) {
+        reply(id, "item not found", "");
+        return;
+    }
+    
+    var req = null;
+    if (item.actions && item.actions.go) {
+       req = item.actions.go.cmd.slice();
+       if (item.actions.go.params) {
+           for (var key in item.actions.go.params) {
+               req.push(key + ":" + item.actions.go.params[key]);
+           }
+       }
+    } else if (item.actions && item.actions.do) {
+       req = item.actions.do.cmd.slice();
+       if (item.actions.do.params) {
+           for (var key in item.actions.do.params) {
+               req.push(key + ":" + item.actions.do.params[key]);
+           }
+       }
+    }
+    
+    if (req) {
+        rpc(player, req, function (err, json) {
+            reply(id, err, "ok");
+        });
+    } else {
+        reply(id, "no action", "");
+    }
     return;
   }
 
