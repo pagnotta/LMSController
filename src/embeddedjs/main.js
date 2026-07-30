@@ -25,11 +25,24 @@ function row(text, selected) {
 	});
 }
 
-/** Replaces a container's contents with lines of text. */
+/** Replaces a container's contents with lines of text, reusing components. */
 function fill(container, texts, selectedIndex) {
-	container.empty();
-	for (let i = 0; i < texts.length; i++)
-		container.add(row(texts[i], i === selectedIndex));
+	let comp = container.first;
+	for (let i = 0; i < texts.length; i++) {
+		let isSelected = i === selectedIndex;
+		let text = texts[i];
+		if (comp) {
+			comp.string = text;
+			comp.skin = isSelected ? skins.highlight : skins.background;
+			comp.style = isSelected ? styles.itemSelected : styles.item;
+			comp = comp.next;
+		} else {
+			container.add(row(text, isSelected));
+		}
+	}
+	while (container.last && container.length > texts.length) {
+		container.remove(container.last);
+	}
 }
 
 class PlayerListBehavior extends Behavior {
@@ -41,6 +54,8 @@ class PlayerListBehavior extends Behavior {
 
 	onDisplaying(column) {
 		column.focus();
+		column.interval = 250;
+		column.start();
 		fill(column, ["loading players..."], -1);
 		this.loadPlayers(column);
 	}
@@ -134,6 +149,7 @@ class PlayerListBehavior extends Behavior {
 					this.menuStart = 0;
 					this.menuSelected = 0;
 					this.menuItems = [];
+					this.marqueeTick = 0;
 					fill(column, ["loading..."], -1);
 					lms.menuGo(this.currentPlayerId, item.id).then(() => {
 						this.loadMenu(column, 0, "item_id:" + item.id);
@@ -191,12 +207,26 @@ class PlayerListBehavior extends Behavior {
 			startIdx = Math.max(0, endIdx - windowSize);
 		}
 		
-		column.empty();
+		const texts = [];
 		for (let i = startIdx; i < endIdx; i++) {
 			const item = this.menuItems[i];
-			const text = (item.isFolder ? "> " : "") + item.text;
-			column.add(row(text, i === this.menuSelected));
+			let text = (item.isFolder ? "> " : "") + item.text;
+			
+			if (i === this.menuSelected && text.length > 14) {
+				const over = text.length - 14;
+				const tick = Math.floor(this.marqueeTick || 0);
+				const phase = tick % (over * 2 + 8);
+				let offset = 0;
+				if (phase > 4 && phase <= 4 + over) {
+					offset = phase - 4;
+				} else if (phase > 4 + over && phase <= 4 + over * 2) {
+					offset = (4 + over * 2) - phase;
+				}
+				text = text.substring(offset);
+			}
+			texts.push(text);
 		}
+		fill(column, texts, this.menuSelected - startIdx);
 	}
 
 	onTouchBegan(column, id, x, y, ticks) {
@@ -220,15 +250,24 @@ class PlayerListBehavior extends Behavior {
 
 		if (cmd) {
 			lms.command(this.currentPlayerId, cmd).then(() => {
-				// Refresh status after a short delay so the server state updates
-				column.duration = 500;
-				column.start();
+				this.statusRefreshTime = Date.now() + 500;
 			});
 		}
 	}
 
-	onFinished(column) {
-		this.refreshStatus(column);
+	onTimeChanged(column) {
+		if (this.statusRefreshTime && Date.now() >= this.statusRefreshTime) {
+			this.statusRefreshTime = 0;
+			this.refreshStatus(column);
+		}
+		
+		if (this.view === "menu" && this.menuItems.length) {
+			this.marqueeTick = (this.marqueeTick || 0) + 1;
+			const item = this.menuItems[this.menuSelected];
+			if (item && item.text.length > 14) {
+				this.paintMenu(column);
+			}
+		}
 	}
 
 	onPressBack(column) {
@@ -239,6 +278,7 @@ class PlayerListBehavior extends Behavior {
 				this.menuSelected = state.selected;
 				this.menuItems = state.items;
 				this.currentMenuParams = state.params;
+				this.marqueeTick = 0;
 				this.paintMenu(column);
 			} else {
 				this.view = "status";
