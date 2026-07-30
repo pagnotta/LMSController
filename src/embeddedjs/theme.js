@@ -22,25 +22,25 @@ export const skins = {
 
 export const styles = {
 	item: new Style({
-		font: "24px Gothic",
+		font: "28px Gothic",
 		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	itemSelected: new Style({
-		font: "bold 24px Gothic",
+		font: "bold 28px Gothic",
 		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	title: new Style({
-		font: "bold 24px Gothic",
+		font: "bold 28px Gothic",
 		color: "white",
 		horizontal: "center",
 		vertical: "middle",
 	}),
 	hint: new Style({
-		font: "24px Gothic",
+		font: "28px Gothic",
 		color: "gray",
 		horizontal: "center",
 		vertical: "middle",
@@ -48,9 +48,9 @@ export const styles = {
 };
 
 export const metrics = {
-	rowHeight: round ? 40 : 36,
+	rowHeight: round ? 48 : 42,
 	// On a round display rows have to move inward so they are not clipped by
 	// the curvature.
 	inset: round ? 30 : 4,
-	titleHeight: 24,
+	titleHeight: 28,
 };
