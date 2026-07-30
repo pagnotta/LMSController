@@ -22,25 +22,25 @@ export const skins = {
 
 export const styles = {
 	item: new Style({
-		font: "21px Roboto",
+		font: "24px Gothic",
 		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	itemSelected: new Style({
-		font: "bold 21px Roboto",
+		font: "bold 24px Gothic",
 		color: "white",
 		horizontal: round ? "center" : "left",
 		vertical: "middle",
 	}),
 	title: new Style({
-		font: "bold 21px Roboto",
+		font: "bold 24px Gothic",
 		color: "white",
 		horizontal: "center",
 		vertical: "middle",
 	}),
 	hint: new Style({
-		font: "21px Roboto",
+		font: "24px Gothic",
 		color: "gray",
 		horizontal: "center",
 		vertical: "middle",
