@@ -300,7 +300,7 @@ class PlayerListBehavior extends Behavior {
 		
 		if (this.view === "menu" && this.menuItems.length) {
 			this.marqueeTick = (this.marqueeTick || 0) + 1;
-			this.updateMarquee(column);
+			// this.updateMarquee(column);
 		}
 	}
 
