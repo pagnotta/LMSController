@@ -35,14 +35,16 @@ function fill(container, texts, selectedIndex) {
 			comp.string = text;
 			comp.skin = isSelected ? skins.highlight : skins.background;
 			comp.style = isSelected ? styles.itemSelected : styles.item;
+			comp.visible = true;
 			comp = comp.next;
 		} else {
 			container.add(row(text, isSelected));
 		}
 	}
-	while (container.last && container.length > texts.length) {
-		container.remove(container.last);
-	}
+	while (comp) {
+			comp.visible = false;
+			comp = comp.next;
+		}
 }
 
 class PlayerListBehavior extends Behavior {
@@ -231,14 +233,15 @@ class PlayerListBehavior extends Behavior {
 				comp.string = text;
 				comp.skin = isSelected ? skins.highlight : skins.background;
 				comp.style = isSelected ? styles.itemSelected : styles.item;
+				comp.visible = true;
 				comp = comp.next;
 			} else {
 				column.add(row(text, isSelected));
 			}
 		}
-		let count = endIdx - startIdx;
-		while (column.length > count) {
-			column.remove(column.last);
+		while (comp) {
+			comp.visible = false;
+			comp = comp.next;
 		}
 	}
 
