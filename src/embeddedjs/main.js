@@ -156,7 +156,7 @@ class PlayerListBehavior extends Behavior {
 					this.marqueeTick = 0;
 					this.lastMarqueeOffset = -1;
 					fill(column, ["loading..."], -1);
-					this.loadMenu(column, 0, "cmd", item.id);
+					this.loadMenu(column, 0, item.folderType, item.id);
 				} else {
 					// Execute Play action
 					fill(column, ["playing..."], -1);
@@ -196,6 +196,9 @@ class PlayerListBehavior extends Behavior {
 			}
 			this.lastMarqueeOffset = -1;
 			this.paintMenu(column);
+		}).catch(e => {
+			this.loadingMenu = false;
+			fill(column, ["Menu Error", String(e.message || e).slice(0, 24)], -1);
 		});
 	}
 

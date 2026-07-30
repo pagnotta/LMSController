@@ -161,20 +161,23 @@ function handle(id, op, arg) {
     
     if (reqType === "node") {
         rpc(player, ["menu", 0, 999, "direct:1"], function(err, json) {
-            if (err || !json.result || !json.result.item_loop) {
+            var loop = json && json.result ? (json.result.item_loop || json.result.loop_loop || json.result.playlist_loop) : null;
+            if (err || !loop) {
                 reply(id, err || "no items", "");
                 return;
             }
-            var loop = json.result.item_loop.filter(function(i) { return i.node === reqId; });
+            loop = loop.filter(function(i) { return i.node === reqId; });
             var out = [];
             for (var i = start; i < start + limit && i < loop.length; i++) {
                 var item = loop[i];
                 var itemId = item.id || ("_" + reqId + "_" + i);
                 cachedMenu[itemId] = item;
                 
-                var isFolder = (item.isANode || (item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") ? "1" : "0";
-                var text = (item.text || "?").substring(0, 30);
-                out.push([text, itemId, isFolder].join(FIELD));
+                var folderType = "0";
+                if (item.isANode) folderType = "node";
+                else if ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") folderType = "cmd";
+                var text = (item.text || item.name || item.title || "?").substring(0, 30);
+                out.push([text, itemId, folderType].join(FIELD));
             }
             reply(id, "", out.join(RECORD));
         });
@@ -199,20 +202,23 @@ function handle(id, op, arg) {
             return;
         }
         rpc(player, req, function(err, json) {
-            if (err || !json.result || !json.result.item_loop) {
+            var loop = json && json.result ? (json.result.item_loop || json.result.loop_loop || json.result.playlist_loop) : null;
+            if (err || !loop) {
                 reply(id, err || "no items", "");
                 return;
             }
-            var loop = json.result.item_loop;
+            // already extracted
             var out = [];
             for (var i = 0; i < loop.length; i++) { // LMS already sliced it using start/limit
                 var item = loop[i];
                 var itemId = item.id || ("_" + reqId + "_" + i);
                 cachedMenu[itemId] = item;
                 
-                var isFolder = ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") ? "1" : "0";
-                var text = (item.text || "?").substring(0, 30);
-                out.push([text, itemId, isFolder].join(FIELD));
+                var folderType = "0";
+                if (item.isANode) folderType = "node";
+                else if ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") folderType = "cmd";
+                var text = (item.text || item.name || item.title || "?").substring(0, 30);
+                out.push([text, itemId, folderType].join(FIELD));
             }
             reply(id, "", out.join(RECORD));
         });

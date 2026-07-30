@@ -66,8 +66,8 @@ export function menu(id, start, limit, reqType, reqId) {
 	return call("menu", [id, start, limit, reqType, reqId].join(FIELD)).then((data) => {
 		if (!data) return [];
 		return data.split(RECORD).map((record) => {
-			const [text, itemId, isFolder] = record.split(FIELD);
-			return { text, id: itemId, isFolder: isFolder === "1" };
+			const [text, itemId, folderType] = record.split(FIELD);
+			return { text, id: itemId, isFolder: folderType !== "0", folderType };
 		});
 	});
 }
