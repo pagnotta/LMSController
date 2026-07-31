@@ -21,6 +21,7 @@
  * trial inside a try/catch.
  */
 import Instrumentation from "instrumentation";
+import Bitmap from "commodetto/Bitmap";
 import { call } from "relay";
 
 /**
@@ -61,6 +62,46 @@ function get(what) {
 		return "?";
 	const value = Instrumentation.get(what);
 	return (undefined === value) ? "?" : value;
+}
+
+/**
+ * Edge length of the cover-art feasibility test, in pixels. 0 disables it.
+ *
+ * Answers the two questions that decide whether cover art is possible, without
+ * building the phone-side pipeline first:
+ *
+ *  - Can Piu show a bitmap that was built at runtime? piuTexture.c takes either
+ *    a resource id or, through xsGetHostChunk, a Commodetto Bitmap -- so in
+ *    principle yes, and this checks it in practice.
+ *  - Does the memory hold? ARGB2222 maps to GBitmapFormat8Bit with
+ *    row_size_bytes = width, so the cost is exactly width * height bytes:
+ *    100x100 is 10000, 120x120 is 14400, and 200x200 would be 40000 against a
+ *    48 KB chunk heap that already carries about 11 KB.
+ *
+ * What this does NOT answer: the phone has no image decoder, so turning an LMS
+ * cover.jpg into ARGB2222 is a separate problem.
+ */
+export const coverTestSize = 0;
+
+/**
+ * Builds a test image in the watch's own memory: a coarse colour ramp, so a
+ * wrong stride or format is obvious on screen rather than subtly off.
+ *
+ * ARGB2222 packs alpha, red, green and blue into two bits each; 0xC0 is full
+ * alpha. Throws like any other JS error, which -- unlike running out of
+ * memory -- the caller can catch and display.
+ *
+ * @param {number} size edge length in pixels
+ * @returns {Bitmap}
+ */
+export function testBitmap(size) {
+	const pixels = new Uint8Array(size * size);
+	for (let y = 0; y < size; y++) {
+		const band = (y * 4 / size) | 0;
+		for (let x = 0; x < size; x++)
+			pixels[y * size + x] = 0xC0 | (band << 4) | (((x * 4 / size) | 0) << 2);
+	}
+	return new Bitmap(size, size, Bitmap.ARGB2222, pixels.buffer, 0);
 }
 
 /**

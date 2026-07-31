@@ -208,7 +208,46 @@ class PlayerListBehavior extends Behavior {
 				s.title || "(no title)",
 				(s.playing ? "playing" : "paused") + "  Vol " + s.volume,
 			], -1);
+			if (diag.coverTestSize)
+				this.showTestCover(column);
 		});
+	}
+
+	/**
+	 * Cover-art feasibility check, see diag.coverTestSize.
+	 *
+	 * Built once and kept, the way a real cover would be. Everything here can
+	 * throw -- an unsupported pixel format, a Skin that will not take a runtime
+	 * texture -- and a thrown error is worth far more than a silent blank area,
+	 * so it goes on the screen.
+	 */
+	showTestCover(column) {
+		if (this.coverShown)
+			return;
+		try {
+			const size = diag.coverTestSize;
+			// Texture(it, alphaBitmap, colorBitmap). The documented forms are
+			// new Texture("logo.png") and new Texture(resourceId), both of which
+			// read from flash; passing bitmaps in the second and third slots is
+			// undocumented but fully supported by the constructor, and it is the
+			// only way in for an image that arrives at runtime.
+			//
+			// The colour bitmap belongs in the THIRD slot. In the second it is
+			// taken for the alpha mask, and that branch of piuTexture.c accepts
+			// only MonochromeAligned or Gray4 -- ARGB2222 there fails with
+			// "invalid texture format".
+			const texture = new Texture(null, null, diag.testBitmap(size));
+			const content = new Content(null, {
+				width: size,
+				height: size,
+				skin: new Skin({ texture, x: 0, y: 0, width: size, height: size }),
+			});
+			column.add(content);
+			this.coverShown = true;
+		} catch (e) {
+			fill(column, ["Cover:", String(e.message || e).slice(0, 24)], -1);
+			this.coverShown = true; // one report is enough
+		}
 	}
 
 	loadMenu(column, start, reqType, reqId) {

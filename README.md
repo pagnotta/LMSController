@@ -74,6 +74,10 @@ Not yet done: cover art, AppGlance, voice search, volume on the status view
 buttons. The player list still renders every player without a scroll window, so
 more players than fit on screen would be clipped.
 
+Cover art is under investigation and blocked on one open question. What is
+known, including the memory arithmetic and a working C app to copy the
+transport from, is in [docs/cover-art.md](docs/cover-art.md).
+
 ## History
 
 Originally by Christian Herzog (daduke). The Pebble.js version on `master`
