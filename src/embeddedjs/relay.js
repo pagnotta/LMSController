@@ -84,11 +84,12 @@ export function init() {
 				return; // unknown id, or the phone's handshake -- ignore
 
 			pending.delete(id);
+			clearTimeout(waiter.timer);
 			const err = msg.get("RS_ERR");
 			if (err)
-				waiter.reject(new Error(String(err)));
+				waiter.onDone(String(err), "");
 			else
-				waiter.resolve(String(msg.get("RS_DATA") ?? ""));
+				waiter.onDone(null, String(msg.get("RS_DATA") ?? ""));
 		},
 		onWritable() {
 			stats.writableEvents++;
@@ -99,35 +100,46 @@ export function init() {
 }
 
 /**
- * Sends a request to the phone and resolves with the response string.
- * @param {string} op   operation, see src/pkjs/index.js
- * @param {string} arg  argument, fields separated by FIELD
- * @returns {Promise<string>}
+ * Sends a request to the phone and reports the answer through a callback.
+ *
+ * Callbacks rather than promises, for two reasons measured on a Pebble Time 2:
+ *
+ *  - Slots. A promise plus its resolve/reject closures plus the derived promise
+ *    of every .then() costs several times what one closure costs, and the slot
+ *    heap peaked at 32672 of 32752 bytes while browsing. Slots, not chunks, are
+ *    what this app runs out of.
+ *  - Safety. XS treats an unhandled rejection as fatal ("fxAbort unhandled
+ *    rejection", app gone). Leaving the app with a request in flight did
+ *    exactly that. A callback that nobody handles simply does nothing.
+ *
+ * The error is a plain string, not an Error object -- allocating an Error for
+ * something the UI only ever truncates into a label is not worth the slots.
+ *
+ * @param {string} op    operation, see src/pkjs/index.js
+ * @param {string} arg   argument, fields separated by FIELD
+ * @param {(err: string|null, data: string) => void} onDone
  */
-export function call(op, arg = "") {
-	return new Promise((resolve, reject) => {
-		const id = nextId++;
-		
-		// Add a timeout to prevent memory leaks if the phone never replies
-		const timer = setTimeout(() => {
-			if (pending.has(id)) {
-				pending.delete(id);
-				reject(new Error("Timeout waiting for phone"));
-			}
-		}, 10000);
-		
-		pending.set(id, { 
-			resolve: (res) => { clearTimeout(timer); resolve(res); },
-			reject: (err) => { clearTimeout(timer); reject(err); }
-		});
+export function call(op, arg, onDone) {
+	const id = nextId++;
 
-		const m = new Map();
-		m.set("RQ_ID", id);
-		m.set("RQ_OP", op);
-		m.set("RQ_ARG", String(arg));
-		outbox.push(m);
-		pump();
-	});
+	// Without this the entry would sit in `pending` for good if the phone never
+	// answers -- and with it, the caller always hears back exactly once.
+	const timer = setTimeout(() => {
+		const waiter = pending.get(id);
+		if (waiter) {
+			pending.delete(id);
+			waiter.onDone("timeout", "");
+		}
+	}, 10000);
+
+	pending.set(id, { onDone, timer });
+
+	const m = new Map();
+	m.set("RQ_ID", id);
+	m.set("RQ_OP", op);
+	m.set("RQ_ARG", String(arg));
+	outbox.push(m);
+	pump();
 }
 
 // The AppMessage channel is opened when this module loads, not on the first

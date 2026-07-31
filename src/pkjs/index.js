@@ -21,7 +21,10 @@ var FIELD = "\u001f";
 // need a chunking extension to the protocol.
 var MAX_DATA = 512;
 
-var cachedMenu = {}; // maps itemId -> full LMS item object
+// Maps itemId -> { item: <LMS item>, base: <the response's base object> }.
+// The base has to be kept: LMS puts the actions for a whole list there, not
+// into the items (see resolveAction).
+var cachedMenu = {};
 
 
 var DEFAULTS = {
@@ -124,7 +127,98 @@ function reply(id, err, data) {
   });
 }
 
+/**
+ * Finds an action for an item.
+ *
+ * LMS sends the actions for a whole list once, in the response's `base`, and
+ * leaves the items carrying only their own parameters. An album, for instance,
+ * arrives as `{text, type, commonParams: {album_id: 7958}}` with no `actions`
+ * at all, while `base.actions.go` holds the command and names `commonParams`
+ * via its `itemsParams` field. Looking only at `item.actions` therefore finds
+ * nothing for albums, tracks, and most plugin menus -- which is why selecting
+ * them used to do nothing.
+ */
+function resolveAction(name, item, base) {
+  if (item.actions && item.actions[name])
+    return item.actions[name];
+  if (base && base.actions && base.actions[name])
+    return base.actions[name];
+  return null;
+}
+
+/** Assembles the slim.request words: cmd, paging, action params, item params. */
+function buildRequest(action, item, start, limit) {
+  var req = action.cmd.slice();
+  var key;
+  if (start !== undefined)
+    req.push(start, limit);
+  if (action.params)
+    for (key in action.params)
+      req.push(key + ":" + action.params[key]);
+  var own = action.itemsParams && item[action.itemsParams];
+  if (own)
+    for (key in own)
+      req.push(key + ":" + own[key]);
+  return req;
+}
+
+/**
+ * What selecting this item should do.
+ *
+ * `go` is always the action behind Select; whether it browses or plays is what
+ * `nextWindow` tells us. On the album level `base.actions.go` runs
+ * `browselibrary items` with no nextWindow, so it opens a list. One level down,
+ * on tracks, `go` runs `playlistcontrol` with `nextWindow: "nowPlaying"` -- the
+ * same key, but it starts playback. So there is nothing to guess from types.
+ *
+ *   "node"  a section of the home menu, filtered on this side
+ *   "cmd"   go returns a new list -- browse into it
+ *   "play"  go (or do) starts playback
+ *   "0"     nothing to do
+ */
+function classify(item, base) {
+  if (item.isANode)
+    return "node";
+  var go = resolveAction("go", item, base);
+  if (go)
+    return go.nextWindow ? "play" : "cmd";
+  if (resolveAction("play", item, base) || resolveAction("do", item, base))
+    return "play";
+  return "0";
+}
+
+/** One line per item, cut on a record boundary so no half record is sent. */
+function encodeItems(loop, base, reqId, start, limit, total) {
+  var out = String(total);
+  var budget = MAX_DATA;
+  for (var i = start; i < start + limit && i < loop.length; i++) {
+    var item = loop[i];
+    var itemId = item.id || ("_" + reqId + "_" + i);
+    cachedMenu[itemId] = { item: item, base: base };
+
+    // Album titles arrive as "album\nartist"; the watch shows a single line.
+    var text = String(item.text || item.name || item.title || "?")
+      .replace(/\s*\n\s*/g, " - ").substring(0, 28);
+    var record = RECORD + [text, itemId, classify(item, base)].join(FIELD);
+
+    // Truncating mid-record used to drop the last item silently, which made a
+    // full page look short and the list appear to end early.
+    if (out.length + record.length > budget)
+      break;
+    out += record;
+  }
+  return out;
+}
+
 function handle(id, op, arg) {
+  // Diagnostics from the watch. src/embeddedjs/ has no route to `pebble logs`
+  // of its own, so it borrows the relay. See src/embeddedjs/diag.js.
+  if (op === "log") {
+    console.log("watch: " + arg);
+    reply(id, null, "ok");
+    return;
+  }
+
   if (op === "players") {
     rpc("-", ["serverstatus", 0, 99], function (err, json) {
       reply(id, err, err ? "" : encodePlayers(json));
@@ -160,69 +254,43 @@ function handle(id, op, arg) {
     var reqId = parts[4] || "home";
     
     if (reqType === "node") {
+        // The home menu arrives whole and is split into sections by `node`, so
+        // paging happens here rather than on the server.
         rpc(player, ["menu", 0, 999, "direct:1"], function(err, json) {
-            var loop = json && json.result ? (json.result.item_loop || json.result.loop_loop || json.result.playlist_loop) : null;
+            var loop = json && json.result ? json.result.item_loop : null;
             if (err || !loop) {
                 reply(id, err || "no items", "");
                 return;
             }
             loop = loop.filter(function(i) { return i.node === reqId; });
-            var out = [];
-            for (var i = start; i < start + limit && i < loop.length; i++) {
-                var item = loop[i];
-                var itemId = item.id || ("_" + reqId + "_" + i);
-                cachedMenu[itemId] = item;
-                
-                var folderType = "0";
-                if (item.isANode) folderType = "node";
-                else if ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") folderType = "cmd";
-                var text = (item.text || item.name || item.title || "?").substring(0, 30);
-                out.push([text, itemId, folderType].join(FIELD));
-            }
-            reply(id, "", out.join(RECORD));
+            reply(id, "", encodeItems(loop, json.result.base, reqId, start, limit, loop.length));
         });
     } else if (reqType === "cmd") {
-        var parentItem = cachedMenu[reqId];
-        if (!parentItem) {
+        var parent = cachedMenu[reqId];
+        if (!parent) {
             reply(id, "parent not found", "");
             return;
         }
-        var req = [];
-        if (parentItem.actions && parentItem.actions.go) {
-            req = parentItem.actions.go.cmd.slice();
-            req.push(start, limit);
-            if (parentItem.actions.go.params) {
-                for (var key in parentItem.actions.go.params) {
-                    req.push(key + ":" + parentItem.actions.go.params[key]);
-                }
-            }
-        }
-        if (!req.length) {
+        var action = resolveAction("go", parent.item, parent.base);
+        if (!action) {
             reply(id, "no cmd", "");
             return;
         }
-        rpc(player, req, function(err, json) {
-            var loop = json && json.result ? (json.result.item_loop || json.result.loop_loop || json.result.playlist_loop) : null;
+        rpc(player, buildRequest(action, parent.item, start, limit), function(err, json) {
+            var result = json && json.result;
+            var loop = result ? (result.item_loop || result.loop_loop || result.playlist_loop) : null;
             if (err || !loop) {
                 reply(id, err || "no items", "");
                 return;
             }
-            // already extracted
-            var out = [];
-            // Force slice to prevent huge memory allocations if plugin ignores start/limit
+            // LMS honours start/limit, so what came back is already the page and
+            // is indexed from 0. A plugin that ignores paging returns everything,
+            // and then the page has to be cut out here.
             var sliceStart = loop.length > limit ? start : 0;
-            for (var i = sliceStart; i < sliceStart + limit && i < loop.length; i++) {
-                var item = loop[i];
-                var itemId = item.id || ("_" + reqId + "_" + i);
-                cachedMenu[itemId] = item;
-                
-                var folderType = "0";
-                if (item.isANode) folderType = "node";
-                else if ((item.actions && item.actions.go) || item.type === "playlist" || item.type === "album") folderType = "cmd";
-                var text = (item.text || item.name || item.title || "?").substring(0, 30);
-                out.push([text, itemId, folderType].join(FIELD));
-            }
-            reply(id, "", out.join(RECORD));
+            // `count` is the total for the level; without it the caller cannot
+            // tell the end of the list from a page that was cut for size.
+            var total = (result.count === undefined) ? (sliceStart + loop.length) : parseInt(result.count, 10);
+            reply(id, "", encodeItems(loop, result.base, reqId, sliceStart, limit, total));
         });
     }
     return;
@@ -232,37 +300,27 @@ function handle(id, op, arg) {
     var parts = String(arg).split(FIELD);
     var player = parts[0];
     var itemId = parts[1];
-    var item = cachedMenu[itemId];
-    
-    if (!item) {
+    var entry = cachedMenu[itemId];
+
+    if (!entry) {
         reply(id, "item not found", "");
         return;
     }
-    
-    var req = null;
-    if (item.actions && item.actions.go) {
-       req = item.actions.go.cmd.slice();
-       if (item.actions.go.params) {
-           for (var key in item.actions.go.params) {
-               req.push(key + ":" + item.actions.go.params[key]);
-           }
-       }
-    } else if (item.actions && item.actions.do) {
-       req = item.actions.do.cmd.slice();
-       if (item.actions.do.params) {
-           for (var key in item.actions.do.params) {
-               req.push(key + ":" + item.actions.do.params[key]);
-           }
-       }
-    }
-    
-    if (req) {
-        rpc(player, req, function (err, json) {
-            reply(id, err, "ok");
-        });
-    } else {
+
+    // Same order the watch's classify() used: whatever "go" resolves to is the
+    // action behind Select, and for a track that is playlistcontrol.
+    var goAction = resolveAction("go", entry.item, entry.base) ||
+                   resolveAction("play", entry.item, entry.base) ||
+                   resolveAction("do", entry.item, entry.base);
+    if (!goAction) {
         reply(id, "no action", "");
+        return;
     }
+
+    // No start/limit here: this runs the action, it does not page a list.
+    rpc(player, buildRequest(goAction, entry.item), function (err) {
+        reply(id, err, "ok");
+    });
     return;
   }
 

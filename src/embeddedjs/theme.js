@@ -45,6 +45,14 @@ export const styles = {
 		horizontal: "center",
 		vertical: "middle",
 	}),
+	// Memory overlay, see diag.js. Smallest font available, so the four
+	// counters fit on one line.
+	diag: new Style({
+		font: "14px Gothic",
+		color: "yellow",
+		horizontal: "center",
+		vertical: "middle",
+	}),
 };
 
 export const metrics = {
@@ -53,4 +61,5 @@ export const metrics = {
 	// the curvature.
 	inset: round ? 30 : 4,
 	titleHeight: 28,
+	diagHeight: 18,
 };

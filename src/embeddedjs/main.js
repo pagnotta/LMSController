@@ -13,6 +13,12 @@
 import {} from "piu/MC";
 import { skins, styles, metrics } from "theme";
 import * as lms from "lms";
+import * as diag from "diag";
+
+// Items per menu request. One page has to survive the trip in a single
+// AppMessage (MAX_DATA in src/pkjs/index.js), so this is a transport limit
+// rather than a display one -- the visible window is usually smaller.
+const PAGE = 10;
 
 function row(text, selected) {
 	return new Label(null, {
@@ -58,23 +64,27 @@ class PlayerListBehavior extends Behavior {
 		column.focus();
 		column.interval = 250;
 		column.start();
+		if (diag.probeOnStart) {
+			diag.probe((text) => fill(column, [text], -1));
+			return;
+		}
 		fill(column, ["loading players..."], -1);
 		this.loadPlayers(column);
 	}
 
 	loadPlayers(column) {
-		lms.players()
-			.then((list) => {
-				this.players = list;
-				this.selected = 0;
-				this.view = "list";
-				this.paint(column);
-			})
-			.catch((e) => {
+		lms.players((err, list) => {
+			if (err) {
 				this.players = [];
 				this.view = "error";
-				fill(column, ["No LMS", String(e.message || e).slice(0, 24)], -1);
-			});
+				fill(column, ["No LMS", String(err).slice(0, 24)], -1);
+				return;
+			}
+			this.players = list;
+			this.selected = 0;
+			this.view = "list";
+			this.paint(column);
+		});
 	}
 
 	paint(column) {
@@ -99,34 +109,42 @@ class PlayerListBehavior extends Behavior {
 		if (this.view === "status") {
 			this.loadPlayers(column);
 		} else if (this.view === "menu") {
-			if (this.menuSelected > 0 && !this.loadingMenu) {
-				if (this.menuSelected > this.menuStart) {
-					this.menuSelected--;
-					this.paintMenu(column);
-				} else {
-					this.menuSelected--;
-					this.paintMenu(column);
-					this.loadMenu(column, Math.max(0, this.menuStart - 10), this.currentReqType, this.currentReqId);
-				}
-			}
+			this.moveMenu(column, -1);
 		}
 	}
 
 	onPressDown(column) {
 		this.move(column, 1);
-		if (this.view === "status") {
-		} else if (this.view === "menu") {
-			if (this.menuItems.length > 0 && !this.loadingMenu) {
-				if (this.menuSelected < this.menuStart + this.menuItems.length - 1) {
-					this.menuSelected++;
-					this.paintMenu(column);
-				} else if (!this.menuAtEnd) {
-					this.menuSelected++;
-					this.paintMenu(column);
-					this.loadMenu(column, this.menuStart + this.menuItems.length, this.currentReqType, this.currentReqId);
-				}
-			}
+		if (this.view === "menu") {
+			this.moveMenu(column, +1);
 		}
+	}
+
+	/**
+	 * Moves the menu cursor, fetching the neighbouring page when it steps off
+	 * the loaded one.
+	 *
+	 * The end of the list comes from the server's total, not from a short page.
+	 * Deducing it from "fewer than PAGE items came back" was wrong whenever a
+	 * page had been cut down to fit one AppMessage: the list then looked
+	 * finished while items were still left, and scrolling stopped dead.
+	 */
+	moveMenu(column, delta) {
+		if (this.loadingMenu || !this.menuItems.length)
+			return;
+		const next = this.menuSelected + delta;
+		if (next < 0 || next >= this.menuTotal)
+			return;
+
+		this.menuSelected = next;
+		if (next >= this.menuStart && next < this.menuStart + this.menuItems.length) {
+			this.paintMenu(column);
+			return;
+		}
+		this.paintMenu(column);
+		this.loadMenu(column,
+			delta < 0 ? Math.max(0, this.menuStart - PAGE) : this.menuStart + this.menuItems.length,
+			this.currentReqType, this.currentReqId);
 	}
 
 	onPressSelect(column) {
@@ -148,18 +166,24 @@ class PlayerListBehavior extends Behavior {
 			const item = this.menuItems[this.menuSelected - this.menuStart];
 			if (item && !this.loadingMenu) {
 				if (item.isFolder) {
-					this.menuHistory.push({ start: this.menuStart, selected: this.menuSelected, items: this.menuItems, reqType: this.currentReqType, reqId: this.currentReqId });
+					this.menuHistory.push({
+						start: this.menuStart,
+						selected: this.menuSelected,
+						items: this.menuItems,
+						total: this.menuTotal,
+						reqType: this.currentReqType,
+						reqId: this.currentReqId,
+					});
 					this.menuStart = 0;
 					this.menuSelected = 0;
 					this.menuItems = [];
-					this.marqueeTick = 0;
-					this.lastMarqueeOffset = -1;
 					fill(column, ["loading..."], -1);
-					this.loadMenu(column, 0, item.folderType, item.id);
+					this.loadMenu(column, 0, item.kind, item.id);
 				} else {
-					// Execute Play action
 					fill(column, ["playing..."], -1);
-					lms.menuGo(this.currentPlayerId, item.id).then(() => {
+					lms.menuGo(this.currentPlayerId, item.id, (err) => {
+						if (err)
+							return this.showError(column, err);
 						this.view = "status";
 						this.refreshStatus(column);
 					});
@@ -169,42 +193,44 @@ class PlayerListBehavior extends Behavior {
 		return true;
 	}
 
+	/** Shows a failed request without letting it take the app down. */
+	showError(column, err) {
+		fill(column, ["Error", String(err).slice(0, 24)], -1);
+	}
+
 	refreshStatus(column) {
 		if (this.view !== "status") return;
-		lms.status(this.currentPlayerId)
-			.then((s) => {
-				fill(column, [
-					s.artist || "(no artist)",
-					s.title || "(no title)",
-					(s.playing ? "playing" : "paused") + "  Vol " + s.volume,
-				], -1);
-			})
-			.catch((e) => fill(column, ["Error", String(e.message || e).slice(0, 24)], -1));
+		lms.status(this.currentPlayerId, (err, s) => {
+			if (err)
+				return this.showError(column, err);
+			fill(column, [
+				s.artist || "(no artist)",
+				s.title || "(no title)",
+				(s.playing ? "playing" : "paused") + "  Vol " + s.volume,
+			], -1);
+		});
 	}
 
 	loadMenu(column, start, reqType, reqId) {
 		this.currentReqType = reqType;
 		this.currentReqId = reqId;
 		this.loadingMenu = true;
-		lms.menu(this.currentPlayerId, start, 10, reqType, reqId).then(items => {
+		lms.menu(this.currentPlayerId, start, PAGE, reqType, reqId, (err, page) => {
 			this.loadingMenu = false;
-			if (items.length > 0 || start === 0) {
-				this.menuStart = start;
-				this.menuItems = items;
-				this.menuAtEnd = items.length < 10;
-				if (this.menuSelected < this.menuStart) this.menuSelected = this.menuStart;
-				if (this.menuSelected >= this.menuStart + items.length && items.length > 0) this.menuSelected = this.menuStart + items.length - 1;
-			} else {
-				this.menuAtEnd = true;
-				if (this.menuSelected >= this.menuStart + this.menuItems.length) {
-					this.menuSelected = this.menuStart + this.menuItems.length - 1;
-				}
+			if (err) {
+				fill(column, ["Menu Error", String(err).slice(0, 24)], -1);
+				return;
 			}
-			this.lastMarqueeOffset = -1;
+			this.menuStart = start;
+			this.menuItems = page.items;
+			this.menuTotal = page.total;
+			// Keep the cursor inside the page that just arrived.
+			if (this.menuSelected < start)
+				this.menuSelected = start;
+			const lastIndex = start + page.items.length - 1;
+			if (this.menuSelected > lastIndex)
+				this.menuSelected = Math.max(start, lastIndex);
 			this.paintMenu(column);
-		}).catch(e => {
-			this.loadingMenu = false;
-			fill(column, ["Menu Error", String(e.message || e).slice(0, 24)], -1);
 		});
 	}
 
@@ -214,13 +240,25 @@ class PlayerListBehavior extends Behavior {
 			fill(column, ["Empty"], -1);
 			return;
 		}
-		const windowSize = Math.floor(metrics.pixels / metrics.rowHeight) || 6;
-		let startIdx = Math.max(0, this.menuSelected - Math.floor(windowSize / 2));
-		let endIdx = Math.min(this.menuStart + this.menuItems.length, startIdx + windowSize);
-		if (endIdx - startIdx < windowSize) {
-			startIdx = Math.max(0, endIdx - windowSize);
-		}
-		
+		// How many rows actually fit. This used to read metrics.pixels, which
+		// theme.js never defined, so the expression was NaN and always fell back
+		// to 6 -- one row more than emery's 228 px can show at rowHeight 42. The
+		// sixth entry sat below the edge of the screen and the window never
+		// scrolled to reveal it. Measuring the laid-out container instead is
+		// right for both emery and gabbro, and accounts for the diag bar.
+		const windowSize = Math.max(1, Math.floor(column.height / metrics.rowHeight));
+
+		// The window has to stay inside the loaded chunk: indices outside it have
+		// no item and would paint as gaps.
+		const first = this.menuStart;
+		const last = this.menuStart + this.menuItems.length;
+		let startIdx = this.menuSelected - (windowSize >> 1);
+		if (startIdx > last - windowSize)
+			startIdx = last - windowSize;
+		if (startIdx < first)
+			startIdx = first;
+		const endIdx = Math.min(last, startIdx + windowSize);
+
 		let comp = column.first;
 		for (let i = startIdx; i < endIdx; i++) {
 			let isSelected = i === this.menuSelected;
@@ -265,7 +303,9 @@ class PlayerListBehavior extends Behavior {
 		}
 
 		if (cmd) {
-			lms.command(this.currentPlayerId, cmd).then(() => {
+			lms.command(this.currentPlayerId, cmd, (err) => {
+				if (err)
+					return this.showError(column, err);
 				this.statusRefreshTime = Date.now() + 500;
 			});
 		}
@@ -276,6 +316,14 @@ class PlayerListBehavior extends Behavior {
 			this.statusRefreshTime = 0;
 			this.refreshStatus(column);
 		}
+		if (diag.enabled) {
+			// Once a second is enough; the overlay itself allocates a string.
+			this.diagTick = (this.diagTick || 0) + 1;
+			if (this.diagTick >= 4) {
+				this.diagTick = 0;
+				column.next.string = diag.line();
+			}
+		}
 	}
 
 	onPressBack(column) {
@@ -285,10 +333,9 @@ class PlayerListBehavior extends Behavior {
 				this.menuStart = state.start;
 				this.menuSelected = state.selected;
 				this.menuItems = state.items;
+				this.menuTotal = state.total;
 				this.currentReqType = state.reqType;
 				this.currentReqId = state.reqId;
-				this.marqueeTick = 0;
-				this.lastMarqueeOffset = -1;
 				this.paintMenu(column);
 			} else {
 				this.view = "status";
@@ -310,12 +357,23 @@ const LMSApplication = Application.template(($) => ({
 	contents: [
 		Column($, {
 			top: 0,
-			bottom: 0,
+			bottom: diag.enabled ? metrics.diagHeight : 0,
 			left: 0,
 			right: 0,
 			active: true,
 			Behavior: PlayerListBehavior,
 			contents: [],
+		}),
+		// The behavior reaches this via `column.next`. Kept outside the Column
+		// so fill() and paintMenu(), which walk every child, leave it alone.
+		Label($, {
+			left: 0,
+			right: 0,
+			bottom: 0,
+			height: diag.enabled ? metrics.diagHeight : 0,
+			skin: skins.bar,
+			style: styles.diag,
+			string: "",
 		}),
 	],
 }));
