@@ -9,7 +9,7 @@
   "pebble": {
     "displayName": "LMS Controller",
     "uuid": "0f0f1356-cafe-4589-9255-596bd0849536",
-    "projectType": "moddable",
+    "projectType": "native",
     "sdkVersion": "3",
     "enableMultiJS": true,
     "targetPlatforms": [

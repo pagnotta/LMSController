@@ -2,12 +2,13 @@
 
 Control your Logitech Media Server players from your Pebble.
 
-This branch (`alloy`) is the rewrite on the **Alloy SDK** — JavaScript running
-natively on the watch, with the Piu UI framework. Target platforms are
+This branch (`c-port`) is the rewrite in **C** against Pebble SDK 4.17, for
 **emery** (Pebble Time 2) and **gabbro** (Pebble Round 2).
 
-The original Pebble.js version is untouched on `master`. It still runs, but it
-no longer builds with a current SDK and does not support the new platforms.
+The original Pebble.js version is untouched on `master`. The Alloy/Piu attempt
+lives on `alloy` — it works, but it cannot display cover art at all, which is
+why the app moved to C. The reasoning and the measurements are in
+[docs/cover-art.md](docs/cover-art.md).
 
 ## Build and run
 
@@ -23,65 +24,57 @@ Tested with pebble-tool 5.0.39 and SDK 4.17.
 
 ```
 src/
-  embeddedjs/        JavaScript on the watch (Moddable XS)
-    main.js          Piu UI: player list, status view
-    theme.js         Skins, styles and metrics for emery and gabbro
-    lms.js           LMS interface (players, status, command, menu)
-    relay.js         Transport to the phone side over AppMessage
-    diag.js          Memory diagnostics, see "Memory" below
-    manifest.json    Moddable mod manifest
-  pkjs/
-    index.js         HTTP to LMS, reduces responses for the watch
   c/
-    mdbl.c           C entry point, boots the JS machine
+    main.c              app entry
+    comm.c              AppMessage relay to the phone, queue and timeouts
+    lms.c               LMS operations; turns wire strings into structs
+    players_window.c    screen 1: player list
+    status_window.c     screen 2: now playing, touch control
+    browse_window.c     screen 3: the LMS menu tree, one window per level
+    ui.h                colours and the screen entry points
+  pkjs/
+    index.js            HTTP to LMS, reduces responses for the watch
 ```
 
-Networking deliberately goes through the phone rather than on-device
-`fetch()`. The reasons and measurements are in
-[docs/networking.md](docs/networking.md).
+Networking deliberately goes through the phone rather than from the watch. The
+reasons and measurements are in [docs/networking.md](docs/networking.md).
 
-## Configuration
+`src/pkjs/index.js` carries over from the Alloy version unchanged — the wire
+protocol is the same, and it is the half that took the most debugging.
 
-Server address, port and credentials are set on the phone through the Clay
-configuration page. `DEFAULTS` in `src/pkjs/index.js` applies until then.
+## Controls
+
+Following [navigation_concept.md](navigation_concept.md):
+
+| Screen | Buttons | Touch |
+| --- | --- | --- |
+| Player list | Up/Down select, Select opens, Back exits | — |
+| Now playing | Select opens the menu, Up/Down volume, Back returns | tap play/pause, swipe left/right track, swipe up/down volume |
+| LMS menu | Up/Down scroll, Select opens or plays, Back one level up | — |
 
 ## Memory
 
-The XS machine Alloy creates by default is small: 8 KB chunk heap, 512 slots
-and 384 stack slots, and it cannot grow. `src/c/mdbl.c` asks for a larger one
-through `ModdableCreationRecord`, which brings it to 48 KB of chunks and 32 KB
-of slots — measured, the app peaks near both limits while browsing.
+Measured on a physical Pebble Time 2: the app slot is **122568 bytes**, of which
+this build leaves about 123 KB free at startup. The same app under Alloy had
+12 KB free — the XS machine, the mod archive and the JS runtime take the rest.
 
-**The QEMU emulator ignores that record.** An allocation probe held 40 KB on a
-physical watch and 1 KB in the emulator, and chunk sizes of 1 KB and 900 KB
-behave there exactly like the default. Memory behaviour can only be judged on
-real hardware. `src/embeddedjs/diag.js` carries the probe and an optional
-on-screen counter overlay; on a watch the firmware also logs an `instruments:`
-line every second, which is usually the easier read.
-
-Two consequences for anything added here. Slots, not chunks, are the scarce
-resource, so promises are avoided in favour of callbacks. And an unhandled
-promise rejection is fatal under XS — `fxAbort unhandled rejection`, the app
-disappears — which is the second reason the transport is callback-based.
+That difference is why cover art is possible here and was not there. An
+uncompressed ARGB2222 cover costs `width * height` bytes: 33200 for the 200x166
+the reference app uses on emery, 67600 for gabbro at 260x260.
 
 ## Status
 
-Working: player list, status view with artist, title, volume and playback
-state, touch gestures for play/pause, track and volume, browsing the full LMS
-menu tree with paging, and starting playback from it. Back steps one level up.
+Working: player list, now playing with artist, title, volume and playback
+state, touch gestures, browsing the full LMS menu tree with paging, and
+starting playback from it.
 
-Not yet done: cover art, AppGlance, voice search, volume on the status view
-buttons. The player list still renders every player without a scroll window, so
-more players than fit on screen would be clipped.
-
-Cover art is under investigation and blocked on one open question. What is
-known, including the memory arithmetic and a working C app to copy the
-transport from, is in [docs/cover-art.md](docs/cover-art.md).
+Not yet done: cover art (next, into the space above the artist line on the now
+playing screen), AppGlance, voice search.
 
 ## History
 
-Originally by Christian Herzog (daduke). The Pebble.js version on `master`
-dates from 2016 and ran unchanged for ten years.
+Originally by Christian Herzog (daduke). The Pebble.js version on `master` dates
+from 2016 and ran unchanged for ten years.
 
 ## License
 
