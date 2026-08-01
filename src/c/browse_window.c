@@ -8,13 +8,30 @@
  * short of MAX_LEVELS.
  *
  * Paging: MenuLayer is told the level's true row count, taken from the server,
- * while only one page of items is actually in memory. Rows outside that page
- * draw as a placeholder until they arrive. Deducing the end of a list from a
+ * while only part of the level is in memory. Deducing the end of a list from a
  * short page instead would be wrong -- the phone cuts pages on a record
  * boundary to fit one AppMessage, so a full level can arrive short.
+ *
+ * What is in memory is a contiguous run of items that slides as you scroll, not
+ * a single page. Holding one page meant every fetch threw away the rows just
+ * read, so scrolling left a trail of placeholders both ahead of and behind the
+ * cursor. Several pages cost a few kilobytes, which this app has.
+ *
+ * On top of that the next page is fetched before the cursor reaches it, so in
+ * steady scrolling the placeholder is never seen at all.
  */
 
 #define MAX_LEVELS 10
+
+/**
+ * Items kept per level. Three pages is enough that the rows behind the cursor
+ * survive a fetch ahead of it; at 100 bytes an item that is 3 KB per level.
+ */
+#define CACHE_PAGES 3
+#define CACHE_ITEMS (LMS_PAGE * CACHE_PAGES)
+
+/** How close the cursor may come to an unloaded edge before we fetch. */
+#define PREFETCH_MARGIN 4
 
 typedef struct BrowseWindow {
   Window *window;
@@ -25,8 +42,11 @@ typedef struct BrowseWindow {
   bool node;                 //!< request type for this level
   char title[LMS_TEXT_LEN];
 
-  LMSPage page;              //!< the slice currently in memory
-  int page_start;            //!< index of page.items[0] within the level
+  LMSItem cache[CACHE_ITEMS];
+  int cache_start;           //!< index of cache[0] within the level
+  int cache_count;
+  int total;                 //!< rows at this level, from the server
+
   int requested_start;       //!< start of the fetch in flight
   bool have_total;
   bool loading;
@@ -42,26 +62,107 @@ static void prv_load_page(BrowseWindow *state, int start);
 
 /** True when `row` is one of the items currently in memory. */
 static bool prv_row_loaded(const BrowseWindow *state, int row) {
-  return state->have_total && row >= state->page_start &&
-         row < state->page_start + state->page.count;
+  return state->have_total && row >= state->cache_start &&
+         row < state->cache_start + state->cache_count;
+}
+
+static int prv_cache_end(const BrowseWindow *state) {
+  return state->cache_start + state->cache_count;
+}
+
+static void prv_cache_reset(BrowseWindow *state, int start,
+                            const LMSItem *items, int count) {
+  memcpy(state->cache, items, sizeof(LMSItem) * count);
+  state->cache_start = start;
+  state->cache_count = count;
 }
 
 /**
- * Fetches the page holding the selection, if it is not already there.
+ * Folds an arriving page into the cached run.
  *
- * Called both when the selection moves and after a page lands: scrolling
- * quickly past a pending request would otherwise leave the cursor parked on
+ * Only a page that touches the run can extend it; anything else is a jump, and
+ * the run restarts there. Overflow is dropped from the far end, so the items
+ * nearest the cursor are the ones that survive.
+ */
+static void prv_cache_merge(BrowseWindow *state, int start,
+                            const LMSItem *items, int count) {
+  if (count <= 0)
+    return;
+  if (state->cache_count == 0 || count >= CACHE_ITEMS) {
+    prv_cache_reset(state, start, items, count);
+    return;
+  }
+
+  if (start == prv_cache_end(state)) {
+    const int overflow = state->cache_count + count - CACHE_ITEMS;
+    if (overflow > 0) {
+      memmove(state->cache, state->cache + overflow,
+              sizeof(LMSItem) * (state->cache_count - overflow));
+      state->cache_start += overflow;
+      state->cache_count -= overflow;
+    }
+    memcpy(state->cache + state->cache_count, items, sizeof(LMSItem) * count);
+    state->cache_count += count;
+    return;
+  }
+
+  if (start + count == state->cache_start) {
+    const int overflow = state->cache_count + count - CACHE_ITEMS;
+    if (overflow > 0)
+      state->cache_count -= overflow;  // drop the far end
+    memmove(state->cache + count, state->cache,
+            sizeof(LMSItem) * state->cache_count);
+    memcpy(state->cache, items, sizeof(LMSItem) * count);
+    state->cache_start = start;
+    state->cache_count += count;
+    return;
+  }
+
+  if (start >= state->cache_start && start + count <= prv_cache_end(state)) {
+    memcpy(state->cache + (start - state->cache_start), items,
+           sizeof(LMSItem) * count);
+    return;
+  }
+
+  prv_cache_reset(state, start, items, count);
+}
+
+/**
+ * Keeps the run around the cursor filled.
+ *
+ * Three jobs: fetch the page the cursor landed on if it is not there, and pull
+ * in the next or previous page once the cursor comes within PREFETCH_MARGIN of
+ * an edge. Called when the selection moves and again after a page lands --
+ * scrolling past a pending request would otherwise leave the cursor parked on
  * rows nobody ever asked for.
+ *
+ * The two prefetch directions are split at the middle of the run so they cannot
+ * take turns evicting each other's items on a full cache.
  */
 static void prv_ensure_selection_loaded(BrowseWindow *state) {
-  if (state->loading || !state->have_total)
+  if (state->loading || !state->have_total || state->total == 0)
     return;
 
   const int row = menu_layer_get_selected_index(state->menu).row;
-  if (prv_row_loaded(state, row))
-    return;
 
-  prv_load_page(state, (row / LMS_PAGE) * LMS_PAGE);
+  if (!prv_row_loaded(state, row)) {
+    prv_load_page(state, (row / LMS_PAGE) * LMS_PAGE);
+    return;
+  }
+
+  const int end = prv_cache_end(state);
+  const int middle = state->cache_start + state->cache_count / 2;
+
+  if (row >= middle) {
+    if (row + PREFETCH_MARGIN >= end && end < state->total)
+      prv_load_page(state, end);
+    return;
+  }
+
+  if (row - PREFETCH_MARGIN < state->cache_start && state->cache_start > 0) {
+    const int start = state->cache_start - LMS_PAGE;
+    prv_load_page(state, start < 0 ? 0 : start);
+  }
 }
 
 static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
@@ -75,10 +176,10 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
     return;
   }
 
-  // Only now does page_start become true. Committing it at request time would
-  // make a failed fetch claim the old items belong to the new range.
-  state->page_start = state->requested_start;
-  state->page = *page;
+  // Committed only now: a failed fetch must not make the cached items claim
+  // the range it asked for.
+  prv_cache_merge(state, state->requested_start, page->items, page->count);
+  state->total = page->total;
   state->have_total = true;
   if (page->total == 0)
     strncpy(state->message, "Empty", sizeof(state->message) - 1);
@@ -98,9 +199,9 @@ static void prv_load_page(BrowseWindow *state, int start) {
 
 static uint16_t prv_num_rows(MenuLayer *menu, uint16_t section, void *ctx) {
   BrowseWindow *state = ctx;
-  if (!state->have_total || state->page.total == 0)
+  if (!state->have_total || state->total == 0)
     return 1;  // the message row
-  return state->page.total;
+  return state->total;
 }
 
 static int16_t prv_header_height(MenuLayer *menu, uint16_t section, void *ctx) {
@@ -122,7 +223,7 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
                          void *ctx) {
   BrowseWindow *state = ctx;
 
-  if (!state->have_total || state->page.total == 0) {
+  if (!state->have_total || state->total == 0) {
     ui_draw_menu_row(gctx, cell, state->message);
     return;
   }
@@ -132,7 +233,7 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
   }
 
   // "> " marks a folder, so a list mixing albums and tracks reads at a glance.
-  const LMSItem *item = &state->page.items[index->row - state->page_start];
+  const LMSItem *item = &state->cache[index->row - state->cache_start];
   const bool folder = item->kind == LMSItemNode || item->kind == LMSItemCmd;
   char line[LMS_TEXT_LEN + 3];
   snprintf(line, sizeof(line), "%s%s", folder ? "> " : "", item->text);
@@ -161,7 +262,7 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
   if (!prv_row_loaded(state, index->row))
     return;
 
-  const LMSItem *item = &state->page.items[index->row - state->page_start];
+  const LMSItem *item = &state->cache[index->row - state->cache_start];
 
   switch (item->kind) {
     case LMSItemNode:
