@@ -47,6 +47,11 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
   ui_draw_menu_row(gctx, cell, line);
 }
 
+static void prv_on_selection_changed(MenuLayer *menu, MenuIndex new_index,
+                                     MenuIndex old_index, void *ctx) {
+  ui_marquee_reset();
+}
+
 static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
   PlayersWindow *state = ctx;
   if (state->count == 0)
@@ -96,6 +101,7 @@ static void prv_window_load(Window *window) {
       .get_cell_height = prv_cell_height,
       .draw_row = prv_draw_row,
       .select_click = prv_select,
+      .selection_changed = prv_on_selection_changed,
   });
   ui_style_menu_layer(state->menu);
   menu_layer_set_click_config_onto_window(state->menu, window);
@@ -119,8 +125,13 @@ static void prv_window_unload(Window *window) {
  */
 static void prv_window_appear(Window *window) {
   PlayersWindow *state = window_get_user_data(window);
+  ui_marquee_set_menu(state->menu);
   if (state->count > 0)
     lms_players(prv_on_players, state);
+}
+
+static void prv_window_disappear(Window *window) {
+  ui_marquee_set_menu(NULL);
 }
 
 void players_window_push(void) {
@@ -138,6 +149,7 @@ void players_window_push(void) {
   window_set_window_handlers(s_state->window, (WindowHandlers){
       .load = prv_window_load,
       .appear = prv_window_appear,
+      .disappear = prv_window_disappear,
       .unload = prv_window_unload,
   });
   window_stack_push(s_state->window, true);

@@ -21,6 +21,22 @@
 
 #define HEADER_HEIGHT 26
 
+// Marquee pacing. 40 ms is smooth enough on a Memory LCD without redrawing
+// more often than the screen is worth, and the holds give the eye time to read
+// each end before it moves.
+#define MARQUEE_TICK_MS 40
+#define MARQUEE_STEP_PX 2
+#define MARQUEE_HOLD_START_TICKS 30
+#define MARQUEE_HOLD_END_TICKS 25
+
+static struct {
+  MenuLayer *menu;
+  AppTimer *timer;
+  int16_t offset;    //!< pixels the text is currently shifted left
+  int16_t overflow;  //!< how far it extends past the cell; 0 means no scrolling
+  int16_t hold;      //!< ticks left to sit still at one end
+} s_marquee;
+
 void ui_style_menu_layer(MenuLayer *menu_layer) {
   menu_layer_set_normal_colors(menu_layer, UI_COLOR_BACKGROUND,
                                UI_COLOR_FOREGROUND);
@@ -38,6 +54,61 @@ int16_t ui_menu_header_height(void) {
   return HEADER_HEIGHT;
 }
 
+static void prv_marquee_tick(void *ctx);
+
+static void prv_marquee_run(void) {
+  if (!s_marquee.timer && s_marquee.menu)
+    s_marquee.timer = app_timer_register(MARQUEE_TICK_MS, prv_marquee_tick,
+                                         NULL);
+}
+
+/**
+ * Advances the marquee and asks the list to redraw.
+ *
+ * `overflow` is whatever the last draw of the selected row reported. It is
+ * cleared there too, so a selection whose text fits stops the timer on the
+ * next tick rather than spinning on for the life of the window.
+ */
+static void prv_marquee_tick(void *ctx) {
+  s_marquee.timer = NULL;
+
+  if (!s_marquee.menu || s_marquee.overflow <= 0) {
+    s_marquee.offset = 0;
+    return;
+  }
+
+  if (s_marquee.hold > 0) {
+    s_marquee.hold--;
+  } else if (s_marquee.offset < s_marquee.overflow) {
+    s_marquee.offset += MARQUEE_STEP_PX;
+    if (s_marquee.offset >= s_marquee.overflow) {
+      s_marquee.offset = s_marquee.overflow;
+      s_marquee.hold = MARQUEE_HOLD_END_TICKS;
+    }
+  } else {
+    s_marquee.offset = 0;
+    s_marquee.hold = MARQUEE_HOLD_START_TICKS;
+  }
+
+  layer_mark_dirty(menu_layer_get_layer(s_marquee.menu));
+  prv_marquee_run();
+}
+
+void ui_marquee_set_menu(MenuLayer *menu_layer) {
+  s_marquee.menu = menu_layer;
+  ui_marquee_reset();
+  if (!menu_layer && s_marquee.timer) {
+    app_timer_cancel(s_marquee.timer);
+    s_marquee.timer = NULL;
+  }
+}
+
+void ui_marquee_reset(void) {
+  s_marquee.offset = 0;
+  s_marquee.overflow = 0;
+  s_marquee.hold = MARQUEE_HOLD_START_TICKS;
+}
+
 void ui_draw_menu_row(GContext *ctx, const Layer *cell_layer,
                       const char *text) {
   const bool highlighted = menu_cell_layer_is_highlighted(cell_layer);
@@ -51,21 +122,36 @@ void ui_draw_menu_row(GContext *ctx, const Layer *cell_layer,
       ctx, highlighted ? UI_COLOR_HIGHLIGHT_TEXT : UI_COLOR_FOREGROUND);
 
   const int16_t inset = PBL_IF_ROUND_ELSE(8, 6);
-  const GTextAlignment alignment =
-      PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
+  const int16_t available = bounds.size.w - inset * 2;
 
-  GRect box = GRect(inset, 0, bounds.size.w - inset * 2, bounds.size.h);
-
-  // graphics_draw_text has no vertical centring, so measure and offset. Doing
-  // it by measurement rather than a fixed nudge keeps the row centred if the
-  // font ever changes.
+  // Measured in a box far wider than the screen, so this is the length of the
+  // line as one run rather than what happens to fit. graphics_draw_text has no
+  // vertical centring either, hence using the height here as well.
   const GSize size = graphics_text_layout_get_content_size(
-      text, font, box, GTextOverflowModeTrailingEllipsis, alignment);
-  box.origin.y = (bounds.size.h - size.h) / 2;
-  box.size.h = size.h;
+      text, font, GRect(0, 0, 2000, bounds.size.h), GTextOverflowModeFill,
+      GTextAlignmentLeft);
+  const int16_t y = (bounds.size.h - size.h) / 2;
 
-  graphics_draw_text(ctx, text, font, box, GTextOverflowModeTrailingEllipsis,
-                     alignment, NULL);
+  if (highlighted && size.w > available) {
+    // Scrolls, so no ellipsis and left-aligned even on a round screen -- a
+    // centred marquee reads as drifting rather than as text being revealed.
+    // The cell layer clips, so the part shifted out simply disappears.
+    s_marquee.overflow = size.w - available;
+    prv_marquee_run();
+    graphics_draw_text(ctx, text, font,
+                       GRect(inset - s_marquee.offset, y, size.w + 4, size.h),
+                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    return;
+  }
+
+  if (highlighted)
+    s_marquee.overflow = 0;
+
+  graphics_draw_text(ctx, text, font, GRect(inset, y, available, size.h),
+                     GTextOverflowModeTrailingEllipsis,
+                     PBL_IF_ROUND_ELSE(GTextAlignmentCenter,
+                                       GTextAlignmentLeft),
+                     NULL);
 }
 
 void ui_draw_menu_header(GContext *ctx, const Layer *cell_layer,

@@ -48,3 +48,18 @@ void ui_draw_menu_header(GContext *ctx, const Layer *cell_layer,
                          const char *text);
 int16_t ui_menu_cell_height(bool highlighted);
 int16_t ui_menu_header_height(void);
+
+/**
+ * Marquee for the selected row, so a name wider than the screen can be read.
+ *
+ * Only one row scrolls, only on the list that currently has the screen, and
+ * only while its text actually overhangs -- ui_draw_menu_row() decides that as
+ * it draws, and the timer stops on its own when nothing overflows.
+ *
+ * A list window hands over its MenuLayer on appear and clears it on disappear;
+ * both are required, or the timer would keep redrawing a hidden layer.
+ */
+void ui_marquee_set_menu(MenuLayer *menu_layer);
+
+/** Puts the marquee back to the start. Call whenever the selection moves. */
+void ui_marquee_reset(void);

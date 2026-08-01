@@ -242,6 +242,7 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
 
 static void prv_on_selection_changed(MenuLayer *menu, MenuIndex new_index,
                                      MenuIndex old_index, void *ctx) {
+  ui_marquee_reset();
   prv_ensure_selection_loaded(ctx);
 }
 
@@ -301,6 +302,15 @@ static void prv_window_load(Window *window) {
   prv_load_page(state, 0);
 }
 
+static void prv_window_appear(Window *window) {
+  BrowseWindow *state = window_get_user_data(window);
+  ui_marquee_set_menu(state->menu);
+}
+
+static void prv_window_disappear(Window *window) {
+  ui_marquee_set_menu(NULL);
+}
+
 static void prv_window_unload(Window *window) {
   BrowseWindow *state = window_get_user_data(window);
   lms_cancel(state);
@@ -340,6 +350,8 @@ static void prv_push(const char *player_id, const char *req_id, bool node,
   window_set_background_color(state->window, UI_COLOR_BACKGROUND);
   window_set_window_handlers(state->window, (WindowHandlers){
       .load = prv_window_load,
+      .appear = prv_window_appear,
+      .disappear = prv_window_disappear,
       .unload = prv_window_unload,
   });
 
