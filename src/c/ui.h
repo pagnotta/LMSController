@@ -20,11 +20,19 @@ void browse_window_push_root(const char *player_id);
 /** Closes every open browse level, leaving the status screen on top. */
 void browse_close_all(void);
 
-/** Shared look. Kept in one place so the redesign has a single dial to turn. */
+/**
+ * Shared look. Kept in one place so the redesign has a single dial to turn.
+ *
+ * Taken from the Alloy version's theme.js: black ground, plain blue as the
+ * selection fill, and white type throughout -- including on the selection,
+ * where styles.itemSelected also kept `color: "white"`.
+ */
 #define UI_COLOR_BACKGROUND     GColorBlack
 #define UI_COLOR_FOREGROUND     GColorWhite
-#define UI_COLOR_HIGHLIGHT      GColorVividCerulean
-#define UI_COLOR_HIGHLIGHT_TEXT GColorBlack
+#define UI_COLOR_HIGHLIGHT      GColorBlue
+#define UI_COLOR_HIGHLIGHT_TEXT GColorWhite
+
+/** Structural labels only -- section headers, not content. */
 #define UI_COLOR_MUTED          GColorLightGray
 
 void ui_style_menu_layer(MenuLayer *menu_layer);

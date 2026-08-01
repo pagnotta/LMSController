@@ -188,12 +188,14 @@ static void prv_window_load(Window *window) {
   const int16_t title_y = state_y - title_h;
   const int16_t artist_y = title_y - artist_h;
 
+  // All three lines white, as the Alloy version had them -- blue is the
+  // selection colour in the lists, not a text colour.
   state->artist_layer = prv_make_label(root, GRect(inset, artist_y, width, artist_h),
-                                       FONT_KEY_GOTHIC_24, UI_COLOR_MUTED);
+                                       FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
   state->title_layer = prv_make_label(root, GRect(inset, title_y, width, title_h),
                                       FONT_KEY_GOTHIC_28_BOLD, UI_COLOR_FOREGROUND);
   state->state_layer = prv_make_label(root, GRect(inset, state_y, width, state_h),
-                                      FONT_KEY_GOTHIC_24, UI_COLOR_HIGHLIGHT);
+                                      FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
 
   text_layer_set_overflow_mode(state->title_layer, GTextOverflowModeTrailingEllipsis);
   text_layer_set_overflow_mode(state->artist_layer, GTextOverflowModeTrailingEllipsis);

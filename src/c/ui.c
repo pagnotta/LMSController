@@ -73,7 +73,7 @@ void ui_draw_menu_header(GContext *ctx, const Layer *cell_layer,
   const GRect bounds = layer_get_bounds(cell_layer);
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
 
-  graphics_context_set_text_color(ctx, UI_COLOR_HIGHLIGHT);
+  graphics_context_set_text_color(ctx, UI_COLOR_MUTED);
   graphics_draw_text(ctx, text, font,
                      GRect(6, 0, bounds.size.w - 12, bounds.size.h),
                      GTextOverflowModeTrailingEllipsis,
