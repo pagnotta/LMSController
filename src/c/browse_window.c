@@ -104,13 +104,18 @@ static uint16_t prv_num_rows(MenuLayer *menu, uint16_t section, void *ctx) {
 }
 
 static int16_t prv_header_height(MenuLayer *menu, uint16_t section, void *ctx) {
-  return MENU_CELL_BASIC_HEADER_HEIGHT;
+  return ui_menu_header_height();
+}
+
+static int16_t prv_cell_height(MenuLayer *menu, MenuIndex *index, void *ctx) {
+  const MenuIndex selected = menu_layer_get_selected_index(menu);
+  return ui_menu_cell_height(menu_index_compare(&selected, index) == 0);
 }
 
 static void prv_draw_header(GContext *gctx, const Layer *cell, uint16_t section,
                             void *ctx) {
   BrowseWindow *state = ctx;
-  menu_cell_basic_header_draw(gctx, cell, state->title);
+  ui_draw_menu_header(gctx, cell, state->title);
 }
 
 static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
@@ -118,16 +123,20 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
   BrowseWindow *state = ctx;
 
   if (!state->have_total || state->page.total == 0) {
-    menu_cell_basic_draw(gctx, cell, state->message, NULL, NULL);
+    ui_draw_menu_row(gctx, cell, state->message);
     return;
   }
   if (!prv_row_loaded(state, index->row)) {
-    menu_cell_basic_draw(gctx, cell, "...", NULL, NULL);
+    ui_draw_menu_row(gctx, cell, "...");
     return;
   }
 
+  // "> " marks a folder, so a list mixing albums and tracks reads at a glance.
   const LMSItem *item = &state->page.items[index->row - state->page_start];
-  menu_cell_basic_draw(gctx, cell, item->text, NULL, NULL);
+  const bool folder = item->kind == LMSItemNode || item->kind == LMSItemCmd;
+  char line[LMS_TEXT_LEN + 3];
+  snprintf(line, sizeof(line), "%s%s", folder ? "> " : "", item->text);
+  ui_draw_menu_row(gctx, cell, line);
 }
 
 static void prv_on_selection_changed(MenuLayer *menu, MenuIndex new_index,
@@ -177,6 +186,7 @@ static void prv_window_load(Window *window) {
   state->menu = menu_layer_create(layer_get_bounds(root));
   menu_layer_set_callbacks(state->menu, state, (MenuLayerCallbacks){
       .get_num_rows = prv_num_rows,
+      .get_cell_height = prv_cell_height,
       .get_header_height = prv_header_height,
       .draw_header = prv_draw_header,
       .draw_row = prv_draw_row,

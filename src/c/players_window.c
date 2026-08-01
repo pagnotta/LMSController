@@ -18,16 +18,14 @@ typedef struct {
 
 static PlayersWindow *s_state;
 
-void ui_style_menu_layer(MenuLayer *menu_layer) {
-  menu_layer_set_normal_colors(menu_layer, UI_COLOR_BACKGROUND,
-                               UI_COLOR_FOREGROUND);
-  menu_layer_set_highlight_colors(menu_layer, UI_COLOR_HIGHLIGHT,
-                                  UI_COLOR_HIGHLIGHT_TEXT);
-}
-
 static uint16_t prv_num_rows(MenuLayer *menu, uint16_t section, void *ctx) {
   PlayersWindow *state = ctx;
   return state->count > 0 ? state->count : 1;
+}
+
+static int16_t prv_cell_height(MenuLayer *menu, MenuIndex *index, void *ctx) {
+  const MenuIndex selected = menu_layer_get_selected_index(menu);
+  return ui_menu_cell_height(menu_index_compare(&selected, index) == 0);
 }
 
 static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
@@ -35,13 +33,18 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
   PlayersWindow *state = ctx;
 
   if (state->count == 0) {
-    menu_cell_basic_draw(gctx, cell, state->message, NULL, NULL);
+    ui_draw_menu_row(gctx, cell, state->message);
     return;
   }
 
+  // One line per row, so a player that is playing is marked in the text --
+  // the same "> " the Alloy version used, rather than a subtitle that would
+  // halve the type size again.
   const LMSPlayer *player = &state->players[index->row];
-  menu_cell_basic_draw(gctx, cell, player->name,
-                       player->playing ? "playing" : NULL, NULL);
+  char line[LMS_NAME_LEN + 3];
+  snprintf(line, sizeof(line), "%s%s", player->playing ? "> " : "",
+           player->name);
+  ui_draw_menu_row(gctx, cell, line);
 }
 
 static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
@@ -90,6 +93,7 @@ static void prv_window_load(Window *window) {
   state->menu = menu_layer_create(bounds);
   menu_layer_set_callbacks(state->menu, state, (MenuLayerCallbacks){
       .get_num_rows = prv_num_rows,
+      .get_cell_height = prv_cell_height,
       .draw_row = prv_draw_row,
       .select_click = prv_select,
   });

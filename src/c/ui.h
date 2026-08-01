@@ -28,3 +28,15 @@ void browse_close_all(void);
 #define UI_COLOR_MUTED          GColorLightGray
 
 void ui_style_menu_layer(MenuLayer *menu_layer);
+
+/**
+ * List rendering, shared by both menu screens.
+ *
+ * The SDK's menu_cell_basic_draw uses an 18 px title, much smaller than the
+ * Alloy version's "28px Gothic". These draw at the old size instead; see ui.c.
+ */
+void ui_draw_menu_row(GContext *ctx, const Layer *cell_layer, const char *text);
+void ui_draw_menu_header(GContext *ctx, const Layer *cell_layer,
+                         const char *text);
+int16_t ui_menu_cell_height(bool highlighted);
+int16_t ui_menu_header_height(void);

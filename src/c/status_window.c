@@ -179,19 +179,21 @@ static void prv_window_load(Window *window) {
 
   // Laid out from the bottom so the free space at the top -- where cover art
   // goes later -- grows and shrinks with the screen rather than the text.
-  const int16_t state_h = 24;
-  const int16_t title_h = 56;
-  const int16_t artist_h = 24;
+  // Sizes follow the Alloy version: 28 px bold for the title, one step down
+  // for the lines around it.
+  const int16_t state_h = 30;
+  const int16_t title_h = 64;
+  const int16_t artist_h = 30;
   const int16_t state_y = bounds.size.h - state_h - PBL_IF_ROUND_ELSE(14, 4);
   const int16_t title_y = state_y - title_h;
   const int16_t artist_y = title_y - artist_h;
 
   state->artist_layer = prv_make_label(root, GRect(inset, artist_y, width, artist_h),
-                                       FONT_KEY_GOTHIC_18, UI_COLOR_MUTED);
+                                       FONT_KEY_GOTHIC_24, UI_COLOR_MUTED);
   state->title_layer = prv_make_label(root, GRect(inset, title_y, width, title_h),
                                       FONT_KEY_GOTHIC_28_BOLD, UI_COLOR_FOREGROUND);
   state->state_layer = prv_make_label(root, GRect(inset, state_y, width, state_h),
-                                      FONT_KEY_GOTHIC_18, UI_COLOR_HIGHLIGHT);
+                                      FONT_KEY_GOTHIC_24, UI_COLOR_HIGHLIGHT);
 
   text_layer_set_overflow_mode(state->title_layer, GTextOverflowModeTrailingEllipsis);
   text_layer_set_overflow_mode(state->artist_layer, GTextOverflowModeTrailingEllipsis);
