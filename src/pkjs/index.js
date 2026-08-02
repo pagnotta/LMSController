@@ -238,8 +238,17 @@ function serverRoot() {
 
 /**
  * LMS resizes server-side, which saves the decoder nearly all of its work: a
- * 132x132 JPEG is under 4 KB where the original is half a megabyte. Mode "_p"
- * pads to exactly the requested square, so the watch gets what it asked for.
+ * 200x200 JPEG is around 14 KB where the original can be half a megabyte.
+ *
+ * Mode "_o" scales without padding, and that matters more than it looks: the
+ * padding modes "_p" and "_m" need transparency, so for artwork that is not
+ * exactly square LMS answers them with a PNG -- ignoring the .jpg in the URL
+ * entirely. There is no PNG decoder here, so those covers silently failed to
+ * decode while square ones worked. "_o" never pads and is always JPEG.
+ *
+ * Aspect is preserved, so a square sleeve comes back square and toARGB2222()
+ * crops it; a portrait one is fitted to the height and then scaled up to fill
+ * the width, which is what filling the top of the screen calls for.
  *
  * Addressed by coverid rather than "current": the watch asks for the artwork it
  * saw in a status response, and naming it outright means a track change between
@@ -247,7 +256,7 @@ function serverRoot() {
  */
 function coverUrl(coverId, width) {
   return serverRoot() + "/music/" + encodeURIComponent(coverId) +
-    "/cover_" + width + "x" + width + "_p.jpg";
+    "/cover_" + width + "x" + width + "_o.jpg";
 }
 
 /**
@@ -334,9 +343,17 @@ function handleCover(id, coverId, width, height) {
     if (xhr.status < 200 || xhr.status > 299)
       return fail("HTTP " + xhr.status);
 
+    var bytes = new Uint8Array(xhr.response);
+
+    // JPEG starts FFD8. Checking is worth the two lines: LMS answers some
+    // resize modes with a PNG regardless of the .jpg asked for, and without
+    // this the only symptom is a decoder error that says nothing about why.
+    if (bytes.length < 2 || bytes[0] !== 0xFF || bytes[1] !== 0xD8)
+      return fail("not JPEG (" + xhr.getResponseHeader("Content-Type") + ")");
+
     var data;
     try {
-      var raw = jpeg.decode(new Uint8Array(xhr.response), { useTArray: true });
+      var raw = jpeg.decode(bytes, { useTArray: true });
       data = toARGB2222(raw.data, raw.width, raw.height, width, height);
     } catch (e) {
       return fail("decode: " + e.message);
