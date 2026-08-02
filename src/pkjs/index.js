@@ -18,6 +18,11 @@ var customClay = new Clay(clayConfig, null, { autoHandleEvents: false });
 // which does not exist in this environment.
 var jpeg = require('jpeg-js');
 
+// And a PNG one, because LMS will not always hand over a JPEG: its image proxy
+// keeps the source's transparency, so a station logo with an alpha channel
+// comes back as PNG whatever the URL asks for. See src/pkjs/png.js.
+var png = require('./png');
+
 
 var RECORD = "\u001e";
 var FIELD = "\u001f";
@@ -349,8 +354,8 @@ function coverUrl(key, width) {
 }
 
 /**
- * RGBA to ARGB2222 -- two bits per channel, alpha always full -- scaled to fill
- * the width and cropped at the bottom.
+ * RGBA to ARGB2222 -- two bits per channel -- scaled to fill the width and
+ * cropped at the bottom.
  *
  * The watch asks for the full screen width and only the height its layout has
  * free, so the lower part of the square sleeve is dropped here. Sending the
@@ -373,7 +378,10 @@ function toARGB2222(pixels, srcW, srcH, dstW, dstH) {
       if (sx >= srcW)
         continue;
       var i = (sy * srcW + sx) * 4;
-      out[y * dstW + x] = 0xC0 | ((pixels[i] >> 6) << 4) |
+      // Alpha is carried through at the two bits ARGB2222 has for it, so a
+      // logo on a transparent ground composites onto the watch's background
+      // instead of arriving on a white rectangle.
+      out[y * dstW + x] = ((pixels[i + 3] >> 6) << 6) | ((pixels[i] >> 6) << 4) |
         ((pixels[i + 1] >> 6) << 2) | (pixels[i + 2] >> 6);
     }
   }
@@ -438,21 +446,24 @@ function handleCover(id, key, width, height) {
 
     var bytes = new Uint8Array(xhr.response);
 
-    // JPEG starts FFD8. Checking is worth the two lines: LMS answers some
-    // resize modes with a PNG regardless of the .jpg asked for, and without
-    // this the only symptom is a decoder error that says nothing about why.
-    if (bytes.length < 2 || bytes[0] !== 0xFF || bytes[1] !== 0xD8)
-      return fail("not JPEG (" + xhr.getResponseHeader("Content-Type") + ")");
+    // Which decoder to run is decided by the bytes, not the URL or the
+    // Content-Type: LMS serves PNG from a .jpg path whenever the source has an
+    // alpha channel, and no resize mode or background colour talks it out of
+    // that.
+    var isJpeg = bytes.length > 1 && bytes[0] === 0xFF && bytes[1] === 0xD8;
+    if (!isJpeg && !png.isPNG(bytes))
+      return fail("unknown image (" + xhr.getResponseHeader("Content-Type") + ")");
 
-    var data;
+    var data, raw;
     try {
-      var raw = jpeg.decode(bytes, { useTArray: true });
+      raw = isJpeg ? jpeg.decode(bytes, { useTArray: true }) : png.decode(bytes);
       data = toARGB2222(raw.data, raw.width, raw.height, width, height);
     } catch (e) {
       return fail("decode: " + e.message);
     }
 
-    console.log("cover decoded " + raw.width + "x" + raw.height + " -> " +
+    console.log("cover decoded " + (isJpeg ? "jpeg " : "png ") +
+                raw.width + "x" + raw.height + " -> " +
                 data.length + " bytes, " +
                 Math.ceil(data.length / COVER_CHUNK) + " chunks");
 

@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@rebble/clay": "^1.0.10",
-    "jpeg-js": "^0.3.7"
+    "jpeg-js": "^0.3.7",
+    "pako": "^1.0.11"
   }
 }
