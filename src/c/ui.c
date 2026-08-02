@@ -30,13 +30,17 @@
 #define MARQUEE_HOLD_END_TICKS 25
 
 /**
- * Passes before a line gives up and settles back to an ellipsis.
+ * Passes before a menu row gives up and settles back to an ellipsis.
  *
- * Scrolling costs a redraw every 40 ms, and in a MenuLayer that redraws every
- * visible row, not just the one moving. Three passes is enough to read a name
- * twice over; after that it is only draining the battery at whatever rate the
- * app happens to stay open. A new selection or a new track starts the count
- * again.
+ * Only the menu stops. A redraw there covers every visible row rather than the
+ * one that moves, and the user is navigating anyway -- each change of selection
+ * restarts the travel, so a row that has sat still for three passes has been
+ * read or is not wanted.
+ *
+ * The player screen keeps going. Two small layers with their width already
+ * measured are cheap to redraw, and a watch is looked at from the corner of the
+ * eye at a moment nobody can predict: a line that gave up half a minute ago
+ * shows an ellipsis exactly when it is being read.
  */
 #define MARQUEE_CYCLES 3
 
@@ -205,8 +209,6 @@ struct MarqueeLabel {
   int16_t overflow;    //!< px past the edge; 0 means it fits and will not move
   int16_t text_height; //!< measured once, in set_text
   int16_t hold;
-  uint8_t cycles;
-  bool stopped;
   bool used;
 };
 
@@ -241,10 +243,6 @@ static void prv_label_tick(void *ctx) {
     } else {
       label->offset = 0;
       label->hold = MARQUEE_HOLD_START_TICKS;
-      if (++label->cycles >= MARQUEE_CYCLES) {
-        label->stopped = true;
-        label->overflow = 0;  // settles back to an ellipsis
-      }
     }
     layer_mark_dirty(label->layer);
   }
@@ -330,8 +328,6 @@ void marquee_label_set_text(MarqueeLabel *label, const char *text) {
   label->offset = 0;
   label->overflow = 0;
   label->hold = MARQUEE_HOLD_START_TICKS;
-  label->cycles = 0;
-  label->stopped = false;
 
   const GRect bounds = layer_get_bounds(label->layer);
   if (text && text[0]) {

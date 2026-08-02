@@ -226,22 +226,31 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   prv_schedule_refresh(state,
                        status->playing ? POLL_PLAYING_MS : POLL_IDLE_MS);
 
+  char artist[sizeof(state->artist_text)];
   if (status->album[0] && status->artist[0])
-    snprintf(state->artist_text, sizeof(state->artist_text), "%s - %s",
-             status->artist, status->album);
+    snprintf(artist, sizeof(artist), "%s - %s", status->artist, status->album);
   else
-    snprintf(state->artist_text, sizeof(state->artist_text), "%s",
+    snprintf(artist, sizeof(artist), "%s",
              status->artist[0] ? status->artist : status->album);
 
-  strncpy(state->title_text, status->title[0] ? status->title : "Nothing playing",
-          sizeof(state->title_text) - 1);
-  state->title_text[sizeof(state->title_text) - 1] = '\0';
+  const char *title = status->title[0] ? status->title : "Nothing playing";
 
   snprintf(state->state_text, sizeof(state->state_text), "%s   Vol %d",
            status->playing ? "Playing" : "Paused", status->volume);
 
-  marquee_label_set_text(state->artist_layer, state->artist_text);
-  marquee_label_set_text(state->title_layer, state->title_text);
+  // Only on a real change. Setting the text restarts the travel, and the
+  // status is re-read every ten seconds -- so assigning it unconditionally sent
+  // both lines back to the beginning on every poll.
+  if (strncmp(state->title_text, title, sizeof(state->title_text)) != 0) {
+    strncpy(state->title_text, title, sizeof(state->title_text) - 1);
+    state->title_text[sizeof(state->title_text) - 1] = '\0';
+    marquee_label_set_text(state->title_layer, state->title_text);
+  }
+  if (strncmp(state->artist_text, artist, sizeof(state->artist_text)) != 0) {
+    strncpy(state->artist_text, artist, sizeof(state->artist_text) - 1);
+    state->artist_text[sizeof(state->artist_text) - 1] = '\0';
+    marquee_label_set_text(state->artist_layer, state->artist_text);
+  }
   text_layer_set_text(state->state_layer, state->state_text);
 
   // Keyed on the artwork, not the track: playing an album through keeps the
