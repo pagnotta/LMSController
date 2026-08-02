@@ -112,13 +112,51 @@ function encodePlayers(json) {
   return out.join(RECORD);
 }
 
+// Short keys the watch echoes back, mapped to the artwork URL they stand for.
+// Bounded because a long radio session would otherwise grow it forever.
+var coverUrls = {};
+var coverUrlOrder = [];
+
+function rememberCoverUrl(key, url) {
+  if (coverUrls[key] === undefined) {
+    coverUrlOrder.push(key);
+    if (coverUrlOrder.length > 16)
+      delete coverUrls[coverUrlOrder.shift()];
+  }
+  coverUrls[key] = url;
+}
+
+/** djb2, base36. Short enough for the watch's buffer and for RQ_ARG. */
+function hashKey(text) {
+  var h = 5381;
+  for (var i = 0; i < text.length; i++)
+    h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  return "u" + h.toString(36);
+}
+
 /**
- * artist<FIELD>title<FIELD>volume<FIELD>playing<FIELD>coverid
+ * Identifies the artwork in a way that changes exactly when the image does.
  *
- * The coverid identifies the artwork rather than the track, so the watch can
- * tell "same sleeve, next song" from "new sleeve" and skip a transfer it does
- * not need. It comes from the "c" tag.
+ * Local tracks get LMS's coverid, which is per-sleeve: playing an album through
+ * keeps it, so the watch does not refetch.
+ *
+ * Remote tracks are the awkward case. Their coverid is derived from the stream
+ * URL, so on a radio station it stays the same all evening while the artwork
+ * changes every few minutes -- useless as a change signal. What does change is
+ * artwork_url, so remote tracks are keyed on a hash of that and the URL itself
+ * is kept here for the fetch.
  */
+function coverKey(track) {
+  var art = track.artwork_url;
+  if (art) {
+    var key = hashKey(art);
+    rememberCoverUrl(key, art);
+    return key;
+  }
+  return track.coverid || track.artwork_track_id || "";
+}
+
+/** artist<FIELD>title<FIELD>volume<FIELD>playing<FIELD>coverKey */
 function encodeStatus(json) {
   var r = json.result || {};
   var track = (r.playlist_loop && r.playlist_loop[0]) || {};
@@ -127,7 +165,7 @@ function encodeStatus(json) {
     track.title || r.title || r.current_title || "",
     String(r["mixer volume"] || 0),
     r.mode === "play" ? "1" : "0",
-    track.coverid || track.artwork_track_id || ""
+    coverKey(track)
   ].join(FIELD);
 }
 
@@ -254,9 +292,24 @@ function serverRoot() {
  * saw in a status response, and naming it outright means a track change between
  * the two cannot swap the image underneath the request.
  */
-function coverUrl(coverId, width) {
-  return serverRoot() + "/music/" + encodeURIComponent(coverId) +
-    "/cover_" + width + "x" + width + "_o.jpg";
+function coverUrl(key, width) {
+  var art = coverUrls[key];
+  if (!art) {
+    // A local coverid: LMS serves it straight out of the library.
+    return serverRoot() + "/music/" + encodeURIComponent(key) +
+      "/cover_" + width + "x" + width + "_o.jpg";
+  }
+
+  // Remote artwork. LMS's own image proxy takes the same resize syntax, which
+  // matters: the originals behind these are routinely 1000x1000 and 300 KB,
+  // and decoding one of those in JavaScript on a phone is not worth doing.
+  var sized = "/image_" + width + "x" + width + "_o.jpg";
+  if (art.charAt(0) === "/") {
+    // Already a proxy path, ending in /image.jpg -- swap the last segment.
+    return serverRoot() + art.replace(/\/image[^\/]*$/, "") + sized;
+  }
+  // An absolute URL from a plugin; send it through the proxy ourselves.
+  return serverRoot() + "/imageproxy/" + encodeURIComponent(art) + sized;
 }
 
 /**
@@ -316,7 +369,7 @@ function sendCoverChunks(data, offset) {
   });
 }
 
-function handleCover(id, coverId, width, height) {
+function handleCover(id, key, width, height) {
   if (coverInFlight) {
     reply(id, "busy", "");
     return;
@@ -324,7 +377,7 @@ function handleCover(id, coverId, width, height) {
   coverInFlight = true;
 
   var xhr = new XMLHttpRequest();
-  xhr.open("GET", coverUrl(coverId, width), true);
+  xhr.open("GET", coverUrl(key, width), true);
   xhr.responseType = "arraybuffer";
   xhr.timeout = 8000;
   if (settings.password && typeof btoa === "function") {
