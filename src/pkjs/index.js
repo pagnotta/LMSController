@@ -13,6 +13,11 @@ var Clay = require('@rebble/clay');
 var clayConfig = require('./config.json');
 var customClay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
+// PebbleKit JS has no image decoding of its own and no canvas, so the JPEG is
+// unpacked here in pure JavaScript. `useTArray` keeps it off Node's Buffer,
+// which does not exist in this environment.
+var jpeg = require('jpeg-js');
+
 
 var RECORD = "\u001e";
 var FIELD = "\u001f";
@@ -119,10 +124,10 @@ function encodeStatus(json) {
   ].join(FIELD);
 }
 
-function reply(id, err, data) {
+function reply(id, err, data, onSent) {
   var payload = { RS_ID: id, RS_ERR: err ? String(err) : "" };
   payload.RS_DATA = data ? String(data).substring(0, MAX_DATA) : "";
-  Pebble.sendAppMessage(payload, function () {}, function (e) {
+  Pebble.sendAppMessage(payload, onSent || function () {}, function (e) {
     console.log("sendAppMessage failed: " + JSON.stringify(e));
   });
 }
@@ -210,6 +215,129 @@ function encodeItems(loop, base, reqId, start, limit, total) {
   return out;
 }
 
+// ---- cover art -------------------------------------------------------------
+
+// Pixels per AppMessage. 2000 is what a working C app uses on emery and gabbro;
+// the watch opens its inbox at the firmware maximum to take it.
+var COVER_CHUNK = 2000;
+
+// One transfer at a time. A second would interleave its chunks with the first
+// and both images would come out shredded.
+var coverInFlight = false;
+
+function serverRoot() {
+  return settings.protocol + "://" + settings.host + ":" + settings.port;
+}
+
+/**
+ * LMS resizes server-side, which saves the decoder nearly all of its work: a
+ * 120x120 JPEG is under 4 KB where the original is half a megabyte. Mode "_p"
+ * pads to exactly the requested square, so the watch gets what it asked for.
+ * "current" plus a player id spares us tracking the coverid ourselves.
+ */
+function coverUrl(player, edge) {
+  return serverRoot() + "/music/current/cover_" + edge + "x" + edge +
+    "_p.jpg?player=" + encodeURIComponent(player);
+}
+
+/**
+ * RGBA to ARGB2222: two bits per channel, alpha always full.
+ *
+ * The source should already be the right size, but a plugin or an older LMS
+ * might ignore the resize, so this scales to cover and centres rather than
+ * trusting the dimensions.
+ */
+function toARGB2222(pixels, srcW, srcH, edge) {
+  var out = new Uint8Array(edge * edge);
+  var scale = Math.max(edge / srcW, edge / srcH);
+  var offsetX = (edge - srcW * scale) / 2;
+  var offsetY = (edge - srcH * scale) / 2;
+
+  for (var y = 0; y < edge; y++) {
+    for (var x = 0; x < edge; x++) {
+      var sx = Math.floor((x - offsetX) / scale);
+      var sy = Math.floor((y - offsetY) / scale);
+      if (sx < 0 || sx >= srcW || sy < 0 || sy >= srcH)
+        continue;  // stays 0, which the watch draws as transparent
+      var i = (sy * srcW + sx) * 4;
+      out[y * edge + x] = 0xC0 | ((pixels[i] >> 6) << 4) |
+        ((pixels[i + 1] >> 6) << 2) | (pixels[i + 2] >> 6);
+    }
+  }
+  return out;
+}
+
+/**
+ * Pushes the pixels, one message at a time.
+ *
+ * The next chunk goes out from the success callback of the last, so the
+ * firmware's own acknowledgement paces the transfer and the watch never has to
+ * acknowledge anything itself.
+ */
+function sendCoverChunks(data, offset) {
+  if (offset >= data.length) {
+    coverInFlight = false;
+    return;
+  }
+  var end = Math.min(offset + COVER_CHUNK, data.length);
+  var chunk = [];
+  for (var i = offset; i < end; i++)
+    chunk.push(data[i]);
+
+  Pebble.sendAppMessage({ IMG_OFFSET: offset, IMG_DATA: chunk }, function () {
+    sendCoverChunks(data, end);
+  }, function (e) {
+    coverInFlight = false;
+    console.log("cover chunk failed at " + offset + ": " + JSON.stringify(e));
+  });
+}
+
+function handleCover(id, player, edge) {
+  if (coverInFlight) {
+    reply(id, "busy", "");
+    return;
+  }
+  coverInFlight = true;
+
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", coverUrl(player, edge), true);
+  xhr.responseType = "arraybuffer";
+  xhr.timeout = 8000;
+  if (settings.password && typeof btoa === "function") {
+    xhr.setRequestHeader(
+      "Authorization",
+      "Basic " + btoa(settings.user + ":" + settings.password)
+    );
+  }
+
+  function fail(message) {
+    coverInFlight = false;
+    reply(id, message, "");
+  }
+
+  xhr.onload = function () {
+    if (xhr.status < 200 || xhr.status > 299)
+      return fail("HTTP " + xhr.status);
+
+    var data;
+    try {
+      var raw = jpeg.decode(new Uint8Array(xhr.response), { useTArray: true });
+      data = toARGB2222(raw.data, raw.width, raw.height, edge);
+    } catch (e) {
+      return fail("decode: " + e.message);
+    }
+
+    // The reply is the header. Chunks start only once it has landed, or the
+    // two sends would collide in the outbox.
+    reply(id, null, [edge, edge, data.length,
+                     Math.ceil(data.length / COVER_CHUNK)].join(FIELD),
+          function () { sendCoverChunks(data, 0); });
+  };
+  xhr.onerror = function () { fail("network error"); };
+  xhr.ontimeout = function () { fail("timeout"); };
+  xhr.send();
+}
+
 function handle(id, op, arg) {
   // Diagnostics from the watch. src/embeddedjs/ has no route to `pebble logs`
   // of its own, so it borrows the relay. See src/embeddedjs/diag.js.
@@ -230,6 +358,12 @@ function handle(id, op, arg) {
     rpc(arg, ["status", "-", 1, "tags:al"], function (err, json) {
       reply(id, err, err ? "" : encodeStatus(json));
     });
+    return;
+  }
+
+  if (op === "cover") {
+    var coverParts = String(arg).split(FIELD);
+    handleCover(id, coverParts[0], parseInt(coverParts[1], 10) || 100);
     return;
   }
 

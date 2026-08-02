@@ -25,7 +25,9 @@
       "RQ_ARG",
       "RS_ID",
       "RS_ERR",
-      "RS_DATA"
+      "RS_DATA",
+      "IMG_OFFSET",
+      "IMG_DATA"
     ],
     "resources": {
       "media": [
@@ -39,6 +41,7 @@
     }
   },
   "dependencies": {
-    "@rebble/clay": "^1.0.10"
+    "@rebble/clay": "^1.0.10",
+    "jpeg-js": "^0.3.7"
   }
 }

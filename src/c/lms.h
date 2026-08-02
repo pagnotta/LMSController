@@ -73,6 +73,17 @@ typedef struct {
   LMSItem items[LMS_PAGE];
 } LMSPage;
 
+/** What the phone has ready to send after a lms_cover() request. */
+typedef struct {
+  int width;
+  int height;
+  uint32_t byte_length;  //!< ARGB2222, one byte per pixel
+  int chunks;
+} LMSCover;
+
+typedef void (*LMSCoverHandler)(const char *err, const LMSCover *cover,
+                                void *context);
+
 typedef void (*LMSPlayersHandler)(const char *err, const LMSPlayer *players,
                                   int count, void *context);
 typedef void (*LMSStatusHandler)(const char *err, const LMSStatus *status,
@@ -101,6 +112,16 @@ void lms_menu(const char *player_id, int start, bool node, const char *req_id,
 /** Runs an item's action -- for LMSItemPlay, starts playback. */
 void lms_menu_go(const char *player_id, const char *item_id,
                  LMSDoneHandler handler, void *context);
+
+/**
+ * Asks for the current track's cover, scaled server-side to `edge` square.
+ *
+ * The handler runs once the phone has the image decoded and ready, and reports
+ * how much is coming. The pixels themselves arrive afterwards through the
+ * chunk handler registered with comm_set_image_handler().
+ */
+void lms_cover(const char *player_id, int edge, LMSCoverHandler handler,
+               void *context);
 
 /**
  * Forgets every request made with this context.

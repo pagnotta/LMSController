@@ -130,7 +130,24 @@ static void prv_pump(void) {
   s_sending = true;
 }
 
+static CommImageChunk s_image_chunk;
+static void *s_image_context;
+
+void comm_set_image_handler(CommImageChunk handler, void *context) {
+  s_image_chunk = handler;
+  s_image_context = context;
+}
+
 static void prv_inbox_received(DictionaryIterator *iter, void *ctx) {
+  Tuple *pixels = dict_find(iter, MESSAGE_KEY_IMG_DATA);
+  if (pixels) {
+    Tuple *offset = dict_find(iter, MESSAGE_KEY_IMG_OFFSET);
+    if (s_image_chunk && offset)
+      s_image_chunk((uint32_t)offset->value->int32, pixels->value->data,
+                    pixels->length, s_image_context);
+    return;
+  }
+
   Tuple *id_tuple = dict_find(iter, MESSAGE_KEY_RS_ID);
   if (!id_tuple)
     return;
@@ -185,9 +202,10 @@ void comm_init(void) {
   app_message_register_outbox_sent(prv_outbox_sent);
   app_message_register_outbox_failed(prv_outbox_failed);
 
-  // The inbox has to hold RS_DATA (512 B) plus the other keys and dictionary
-  // overhead; the outbox only ever carries an id and two short strings.
-  app_message_open(1024, 256);
+  // As large an inbox as the firmware will grant: a cover chunk is a couple of
+  // kilobytes of pixels in one message, far past what the replies need. The
+  // outbox only ever carries an id and two short strings.
+  app_message_open(app_message_inbox_size_maximum(), 256);
 }
 
 void comm_deinit(void) {

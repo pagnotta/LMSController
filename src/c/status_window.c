@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "comm.h"
 
 /**
  * Screen 2: what the selected player is doing, and the controls for it.
@@ -7,8 +8,10 @@
  * frees the hardware buttons for navigation: Select opens the LMS menu, Up and
  * Down double as volume, Back returns to the player list.
  *
- * Cover art belongs at the top of this screen. It is not here yet -- the space
- * above the artist line is where it goes.
+ * Cover art sits above the text. The watch decides how big it wants the image
+ * from the space the layout leaves over, and the phone has LMS scale it to
+ * exactly that -- see lms_cover(). The pixels arrive as ARGB2222, one byte per
+ * pixel, straight into a blank GBitmap this window owns.
  */
 
 // How far a finger has to travel before a touch counts as a swipe rather than
@@ -23,11 +26,16 @@
 // LMS needs a moment to act on a command before `status` reports the result.
 #define REFRESH_DELAY_MS 600
 
+#define TEXT_STATE_H  28
+#define TEXT_TITLE_H  34
+#define TEXT_ARTIST_H 28
+
 typedef struct {
   Window *window;
   TextLayer *artist_layer;
   TextLayer *title_layer;
   TextLayer *state_layer;
+  BitmapLayer *cover_layer;
 
   char player_id[LMS_ID_LEN];
   char player_name[LMS_NAME_LEN];
@@ -35,6 +43,15 @@ typedef struct {
   char artist_text[LMS_TRACK_LEN];
   char title_text[LMS_TRACK_LEN];
   char state_text[40];
+
+  GBitmap *cover;
+  uint8_t *cover_data;
+  uint32_t cover_capacity;   //!< bytes the GBitmap can hold
+  uint32_t cover_expected;
+  uint32_t cover_received;
+  int16_t cover_edge;        //!< pixels; 0 means the layout left no room
+  bool cover_receiving;
+  char cover_track[LMS_TRACK_LEN];  //!< title the current cover belongs to
 
   int16_t touch_x;
   int16_t touch_y;
@@ -46,6 +63,78 @@ typedef struct {
 static StatusWindow *s_state;
 
 static void prv_request_status(StatusWindow *state);
+
+// --- cover -----------------------------------------------------------------
+
+static void prv_drop_cover(StatusWindow *state) {
+  state->cover_receiving = false;
+  state->cover_data = NULL;
+  state->cover_capacity = 0;
+  state->cover_expected = 0;
+  state->cover_received = 0;
+  if (state->cover_layer)
+    bitmap_layer_set_bitmap(state->cover_layer, NULL);
+  if (state->cover) {
+    gbitmap_destroy(state->cover);
+    state->cover = NULL;
+  }
+}
+
+static void prv_on_cover(const char *err, const LMSCover *cover, void *ctx) {
+  StatusWindow *state = ctx;
+  if (err) {
+    // Nothing to show is better than the previous track's sleeve, but a
+    // transient failure should not blank a cover that is already correct.
+    state->cover_receiving = false;
+    return;
+  }
+
+  prv_drop_cover(state);
+
+  state->cover = gbitmap_create_blank(GSize(cover->width, cover->height),
+                                      GBitmapFormat8Bit);
+  if (!state->cover)
+    return;
+
+  state->cover_data = gbitmap_get_data(state->cover);
+  state->cover_capacity =
+      (uint32_t)gbitmap_get_bytes_per_row(state->cover) * cover->height;
+  state->cover_expected = cover->byte_length < state->cover_capacity
+                              ? cover->byte_length : state->cover_capacity;
+  state->cover_received = 0;
+  state->cover_receiving = true;
+
+  // Shown while it fills. gbitmap_create_blank zeroes the buffer, and a zero
+  // byte in ARGB2222 is fully transparent, so the unwritten part simply is not
+  // drawn rather than showing as noise.
+  bitmap_layer_set_bitmap(state->cover_layer, state->cover);
+}
+
+static void prv_on_cover_chunk(uint32_t offset, const uint8_t *data,
+                               uint16_t length, void *ctx) {
+  StatusWindow *state = ctx;
+  if (!state->cover_receiving || !state->cover_data)
+    return;
+  // Chunks of an abandoned transfer can still be in flight; anything that does
+  // not fit the buffer we have now is from one of those.
+  if (offset + length > state->cover_capacity)
+    return;
+
+  memcpy(state->cover_data + offset, data, length);
+  state->cover_received += length;
+  if (state->cover_received >= state->cover_expected)
+    state->cover_receiving = false;
+
+  layer_mark_dirty(bitmap_layer_get_layer(state->cover_layer));
+}
+
+static void prv_request_cover(StatusWindow *state) {
+  if (state->cover_edge <= 0)
+    return;
+  lms_cover(state->player_id, state->cover_edge, prv_on_cover, state);
+}
+
+// --- status ----------------------------------------------------------------
 
 static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   StatusWindow *state = ctx;
@@ -70,6 +159,17 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   text_layer_set_text(state->artist_layer, state->artist_text);
   text_layer_set_text(state->title_layer, state->title_text);
   text_layer_set_text(state->state_layer, state->state_text);
+
+  // The title is the cheapest stand-in for "the track changed" the status
+  // response gives us. Fetching on every refresh would re-send the same image
+  // after each volume tap.
+  if (strncmp(state->cover_track, state->title_text,
+              sizeof(state->cover_track)) != 0) {
+    strncpy(state->cover_track, state->title_text,
+            sizeof(state->cover_track) - 1);
+    state->cover_track[sizeof(state->cover_track) - 1] = '\0';
+    prv_request_cover(state);
+  }
 }
 
 static void prv_on_refresh_timer(void *ctx) {
@@ -177,28 +277,37 @@ static void prv_window_load(Window *window) {
   const int16_t inset = PBL_IF_ROUND_ELSE(24, 6);
   const int16_t width = bounds.size.w - inset * 2;
 
-  // Laid out from the bottom so the free space at the top -- where cover art
-  // goes later -- grows and shrinks with the screen rather than the text.
-  // Sizes follow the Alloy version: 28 px bold for the title, one step down
-  // for the lines around it.
-  const int16_t state_h = 30;
-  const int16_t title_h = 64;
-  const int16_t artist_h = 30;
-  const int16_t state_y = bounds.size.h - state_h - PBL_IF_ROUND_ELSE(14, 4);
-  const int16_t title_y = state_y - title_h;
-  const int16_t artist_y = title_y - artist_h;
+  // Laid out from the bottom, and the cover takes whatever is left above. That
+  // way the text keeps its size on both screens and only the image adapts.
+  const int16_t state_y = bounds.size.h - TEXT_STATE_H - PBL_IF_ROUND_ELSE(20, 2);
+  const int16_t title_y = state_y - TEXT_TITLE_H;
+  const int16_t artist_y = title_y - TEXT_ARTIST_H;
 
-  // All three lines white, as the Alloy version had them -- blue is the
-  // selection colour in the lists, not a text colour.
-  state->artist_layer = prv_make_label(root, GRect(inset, artist_y, width, artist_h),
+  state->artist_layer = prv_make_label(root, GRect(inset, artist_y, width, TEXT_ARTIST_H),
                                        FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
-  state->title_layer = prv_make_label(root, GRect(inset, title_y, width, title_h),
+  state->title_layer = prv_make_label(root, GRect(inset, title_y, width, TEXT_TITLE_H),
                                       FONT_KEY_GOTHIC_28_BOLD, UI_COLOR_FOREGROUND);
-  state->state_layer = prv_make_label(root, GRect(inset, state_y, width, state_h),
+  state->state_layer = prv_make_label(root, GRect(inset, state_y, width, TEXT_STATE_H),
                                       FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
 
   text_layer_set_overflow_mode(state->title_layer, GTextOverflowModeTrailingEllipsis);
   text_layer_set_overflow_mode(state->artist_layer, GTextOverflowModeTrailingEllipsis);
+
+  // Square, centred, as tall as the space above the text allows. A round screen
+  // needs more margin or the corners fall off the glass.
+  int16_t edge = artist_y - PBL_IF_ROUND_ELSE(30, 4);
+  if (edge > bounds.size.w)
+    edge = bounds.size.w;
+  if (edge < 0)
+    edge = 0;
+  state->cover_edge = edge;
+
+  state->cover_layer = bitmap_layer_create(
+      GRect((bounds.size.w - edge) / 2, (artist_y - edge) / 2, edge, edge));
+  bitmap_layer_set_background_color(state->cover_layer, GColorClear);
+  // ARGB2222 carries alpha, and GCompOpSet is what honours it.
+  bitmap_layer_set_compositing_mode(state->cover_layer, GCompOpSet);
+  layer_add_child(root, bitmap_layer_get_layer(state->cover_layer));
 
   strncpy(state->title_text, state->player_name, sizeof(state->title_text) - 1);
   strncpy(state->state_text, "Loading...", sizeof(state->state_text) - 1);
@@ -213,11 +322,13 @@ static void prv_window_appear(Window *window) {
   // subscription that outlived the window would steer a player the user has
   // already left.
   touch_service_subscribe(prv_on_touch, state);
+  comm_set_image_handler(prv_on_cover_chunk, state);
   prv_request_status(state);
 }
 
 static void prv_window_disappear(Window *window) {
   touch_service_unsubscribe();
+  comm_set_image_handler(NULL, NULL);
 }
 
 static void prv_window_unload(Window *window) {
@@ -225,6 +336,8 @@ static void prv_window_unload(Window *window) {
   lms_cancel(state);
   if (state->refresh_timer)
     app_timer_cancel(state->refresh_timer);
+  prv_drop_cover(state);
+  bitmap_layer_destroy(state->cover_layer);
   text_layer_destroy(state->artist_layer);
   text_layer_destroy(state->title_layer);
   text_layer_destroy(state->state_layer);

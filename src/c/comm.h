@@ -32,6 +32,25 @@
  */
 typedef void (*CommHandler)(const char *err, const char *data, void *context);
 
+/**
+ * Cover pixels arrive outside the request/response pairing above.
+ *
+ * The reply to a "cover" request carries the dimensions -- so a failed download
+ * is reported like any other error -- and the pixels then follow as a run of
+ * chunks the phone pushes on its own. Flow control is the phone's: it sends the
+ * next chunk from the success callback of the last, so the watch never has to
+ * acknowledge anything.
+ */
+/**
+ * One run of pixels. `offset` is a byte offset into the image, not a chunk
+ * number: a 260x260 cover is 67600 bytes, so counting chunks would tie the
+ * watch to whatever size the phone happens to use.
+ */
+typedef void (*CommImageChunk)(uint32_t offset, const uint8_t *data,
+                               uint16_t length, void *context);
+
+void comm_set_image_handler(CommImageChunk handler, void *context);
+
 void comm_init(void);
 void comm_deinit(void);
 

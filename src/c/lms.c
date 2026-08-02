@@ -11,6 +11,7 @@ typedef enum {
   KindStatus,
   KindPage,
   KindDone,
+  KindCover,
 } RequestKind;
 
 typedef struct {
@@ -22,6 +23,7 @@ typedef struct {
     LMSStatusHandler status;
     LMSPageHandler page;
     LMSDoneHandler done;
+    LMSCoverHandler cover;
   } handler;
 } Request;
 
@@ -189,6 +191,41 @@ static void prv_on_page(const char *err, const char *data, void *context) {
     handler(NULL, &page, user_context);
 }
 
+static void prv_on_cover(const char *err, const char *data, void *context) {
+  Request *r = context;
+  LMSCoverHandler handler = r->handler.cover;
+  void *user_context = r->user_context;
+  r->used = false;
+
+  if (err) {
+    if (handler)
+      handler(err, NULL, user_context);
+    return;
+  }
+
+  char buffer[COMM_MAX_DATA + 1];
+  prv_copy(buffer, sizeof(buffer), data);
+
+  LMSCover cover;
+  char *field = buffer;
+  const char *w = prv_take(&field, LMS_FIELD);
+  const char *h = prv_take(&field, LMS_FIELD);
+  const char *length = prv_take(&field, LMS_FIELD);
+  const char *chunks = prv_take(&field, LMS_FIELD);
+
+  cover.width = w ? atoi(w) : 0;
+  cover.height = h ? atoi(h) : 0;
+  cover.byte_length = length ? (uint32_t)atoi(length) : 0;
+  cover.chunks = chunks ? atoi(chunks) : 0;
+
+  if (!handler)
+    return;
+  if (cover.width <= 0 || cover.height <= 0 || cover.byte_length == 0)
+    handler("no cover", NULL, user_context);
+  else
+    handler(NULL, &cover, user_context);
+}
+
 static void prv_on_done(const char *err, const char *data, void *context) {
   Request *r = context;
   LMSDoneHandler handler = r->handler.done;
@@ -292,6 +329,26 @@ void lms_menu_go(const char *player_id, const char *item_id,
     r->used = false;
     if (handler)
       handler("busy", context);
+  }
+}
+
+void lms_cover(const char *player_id, int edge, LMSCoverHandler handler,
+               void *context) {
+  Request *r = prv_take_slot();
+  if (!r) {
+    handler("busy", NULL, context);
+    return;
+  }
+  r->kind = KindCover;
+  r->handler.cover = handler;
+  r->user_context = context;
+
+  char arg[160];
+  snprintf(arg, sizeof(arg), "%s%c%d", player_id, LMS_FIELD, edge);
+
+  if (!comm_request("cover", arg, prv_on_cover, r)) {
+    r->used = false;
+    handler("busy", NULL, context);
   }
 }
 

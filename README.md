@@ -39,8 +39,26 @@ src/
 Networking deliberately goes through the phone rather than from the watch. The
 reasons and measurements are in [docs/networking.md](docs/networking.md).
 
-`src/pkjs/index.js` carries over from the Alloy version unchanged — the wire
-protocol is the same, and it is the half that took the most debugging.
+`src/pkjs/index.js` carries over from the Alloy version — the wire protocol is
+the same, and it is the half that took the most debugging. Cover art is the one
+addition.
+
+## Cover art
+
+The watch measures the space its layout leaves above the text and asks for a
+square that size. The phone has LMS scale the image server-side
+(`/music/current/cover_<n>x<n>_p.jpg?player=<id>`), which keeps the download
+under 4 KB and the decode cheap, unpacks the JPEG with `jpeg-js`, and quantises
+to ARGB2222 — one byte per pixel, two bits per channel.
+
+The reply to the request carries the dimensions, so a failed download is
+reported like any other error. The pixels then follow as chunks the phone
+pushes on its own, each sent from the success callback of the last, so the
+firmware's acknowledgement paces the transfer. The watch copies them straight
+into a `gbitmap_create_blank()` buffer at the byte offset each chunk names.
+
+`jpeg-js` is pinned to 0.3.x on purpose: 0.4 uses object spread and `const`,
+and the webpack the SDK bundles is version 1, which parses neither.
 
 ## Controls
 
