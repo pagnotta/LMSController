@@ -29,12 +29,25 @@
 #define MARQUEE_HOLD_START_TICKS 30
 #define MARQUEE_HOLD_END_TICKS 25
 
+/**
+ * Passes before a line gives up and settles back to an ellipsis.
+ *
+ * Scrolling costs a redraw every 40 ms, and in a MenuLayer that redraws every
+ * visible row, not just the one moving. Three passes is enough to read a name
+ * twice over; after that it is only draining the battery at whatever rate the
+ * app happens to stay open. A new selection or a new track starts the count
+ * again.
+ */
+#define MARQUEE_CYCLES 3
+
 static struct {
   MenuLayer *menu;
   AppTimer *timer;
   int16_t offset;    //!< pixels the text is currently shifted left
   int16_t overflow;  //!< how far it extends past the cell; 0 means no scrolling
   int16_t hold;      //!< ticks left to sit still at one end
+  uint8_t cycles;    //!< passes completed
+  bool stopped;      //!< done travelling; drawn with an ellipsis from here on
 } s_marquee;
 
 void ui_style_menu_layer(MenuLayer *menu_layer) {
@@ -57,7 +70,7 @@ int16_t ui_menu_header_height(void) {
 static void prv_marquee_tick(void *ctx);
 
 static void prv_marquee_run(void) {
-  if (!s_marquee.timer && s_marquee.menu)
+  if (!s_marquee.timer && s_marquee.menu && !s_marquee.stopped)
     s_marquee.timer = app_timer_register(MARQUEE_TICK_MS, prv_marquee_tick,
                                          NULL);
 }
@@ -88,6 +101,8 @@ static void prv_marquee_tick(void *ctx) {
   } else {
     s_marquee.offset = 0;
     s_marquee.hold = MARQUEE_HOLD_START_TICKS;
+    if (++s_marquee.cycles >= MARQUEE_CYCLES)
+      s_marquee.stopped = true;
   }
 
   layer_mark_dirty(menu_layer_get_layer(s_marquee.menu));
@@ -107,6 +122,8 @@ void ui_marquee_reset(void) {
   s_marquee.offset = 0;
   s_marquee.overflow = 0;
   s_marquee.hold = MARQUEE_HOLD_START_TICKS;
+  s_marquee.cycles = 0;
+  s_marquee.stopped = false;
 }
 
 void ui_draw_menu_row(GContext *ctx, const Layer *cell_layer,
@@ -132,7 +149,7 @@ void ui_draw_menu_row(GContext *ctx, const Layer *cell_layer,
       GTextAlignmentLeft);
   const int16_t y = (bounds.size.h - size.h) / 2;
 
-  if (highlighted && size.w > available) {
+  if (highlighted && size.w > available && !s_marquee.stopped) {
     // Scrolls, so no ellipsis and left-aligned even on a round screen -- a
     // centred marquee reads as drifting rather than as text being revealed.
     // The cell layer clips, so the part shifted out simply disappears.
@@ -186,7 +203,10 @@ struct MarqueeLabel {
   const char *text;    //!< caller-owned, as with TextLayer
   int16_t offset;
   int16_t overflow;    //!< px past the edge; 0 means it fits and will not move
+  int16_t text_height; //!< measured once, in set_text
   int16_t hold;
+  uint8_t cycles;
+  bool stopped;
   bool used;
 };
 
@@ -221,6 +241,10 @@ static void prv_label_tick(void *ctx) {
     } else {
       label->offset = 0;
       label->hold = MARQUEE_HOLD_START_TICKS;
+      if (++label->cycles >= MARQUEE_CYCLES) {
+        label->stopped = true;
+        label->overflow = 0;  // settles back to an ellipsis
+      }
     }
     layer_mark_dirty(label->layer);
   }
@@ -229,33 +253,32 @@ static void prv_label_tick(void *ctx) {
     prv_label_run();
 }
 
+/**
+ * Draws the line. Nothing is measured here -- set_text did that once, so a
+ * scrolling line costs a draw per frame and not a text layout as well.
+ */
 static void prv_label_draw(Layer *layer, GContext *ctx) {
   MarqueeLabel *label = *(MarqueeLabel **)layer_get_data(layer);
   if (!label->text || !label->text[0])
     return;
 
   const GRect bounds = layer_get_bounds(layer);
+  const int16_t y = (bounds.size.h - label->text_height) / 2;
   graphics_context_set_text_color(ctx, label->color);
 
-  const GSize size = graphics_text_layout_get_content_size(
-      label->text, label->font, GRect(0, 0, 2000, bounds.size.h),
-      GTextOverflowModeFill, GTextAlignmentLeft);
-  const int16_t y = (bounds.size.h - size.h) / 2;
-
-  if (size.w > bounds.size.w) {
+  if (label->overflow > 0) {
     // Scrolling, so no ellipsis and left-aligned whatever the screen shape --
     // a centred marquee reads as drifting rather than as text being revealed.
-    label->overflow = size.w - bounds.size.w;
-    prv_label_run();
     graphics_draw_text(ctx, label->text, label->font,
-                       GRect(-label->offset, y, size.w + 4, size.h),
+                       GRect(-label->offset, y,
+                             bounds.size.w + label->overflow + 4,
+                             label->text_height),
                        GTextOverflowModeFill, GTextAlignmentLeft, NULL);
     return;
   }
 
-  label->overflow = 0;
   graphics_draw_text(ctx, label->text, label->font,
-                     GRect(0, y, bounds.size.w, size.h),
+                     GRect(0, y, bounds.size.w, label->text_height),
                      GTextOverflowModeTrailingEllipsis, label->alignment, NULL);
 }
 
@@ -302,9 +325,27 @@ Layer *marquee_label_get_layer(MarqueeLabel *label) {
 void marquee_label_set_text(MarqueeLabel *label, const char *text) {
   if (!label)
     return;
+
   label->text = text;
   label->offset = 0;
   label->overflow = 0;
   label->hold = MARQUEE_HOLD_START_TICKS;
+  label->cycles = 0;
+  label->stopped = false;
+
+  const GRect bounds = layer_get_bounds(label->layer);
+  if (text && text[0]) {
+    // Measured in a box far wider than the screen, so this is the length of the
+    // line as one run rather than what happens to fit. Kept, because the draw
+    // runs 25 times a second while the line travels and this does not change.
+    const GSize size = graphics_text_layout_get_content_size(
+        text, label->font, GRect(0, 0, 2000, bounds.size.h),
+        GTextOverflowModeFill, GTextAlignmentLeft);
+    label->text_height = size.h;
+    if (size.w > bounds.size.w) {
+      label->overflow = size.w - bounds.size.w;
+      prv_label_run();
+    }
+  }
   layer_mark_dirty(label->layer);
 }
