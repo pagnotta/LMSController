@@ -51,7 +51,7 @@ typedef struct {
   uint32_t cover_received;
   int16_t cover_edge;        //!< pixels; 0 means the layout left no room
   bool cover_receiving;
-  char cover_track[LMS_TRACK_LEN];  //!< title the current cover belongs to
+  char cover_id[LMS_COVER_ID_LEN];  //!< artwork the current cover is
 
   int16_t touch_x;
   int16_t touch_y;
@@ -128,10 +128,10 @@ static void prv_on_cover_chunk(uint32_t offset, const uint8_t *data,
   layer_mark_dirty(bitmap_layer_get_layer(state->cover_layer));
 }
 
-static void prv_request_cover(StatusWindow *state) {
+static void prv_request_cover(StatusWindow *state, const char *cover_id) {
   if (state->cover_edge <= 0)
     return;
-  lms_cover(state->player_id, state->cover_edge, prv_on_cover, state);
+  lms_cover(cover_id, state->cover_edge, prv_on_cover, state);
 }
 
 // --- status ----------------------------------------------------------------
@@ -160,16 +160,19 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   text_layer_set_text(state->title_layer, state->title_text);
   text_layer_set_text(state->state_layer, state->state_text);
 
-  // The title is the cheapest stand-in for "the track changed" the status
-  // response gives us. Fetching on every refresh would re-send the same image
-  // after each volume tap.
-  if (strncmp(state->cover_track, state->title_text,
-              sizeof(state->cover_track)) != 0) {
-    strncpy(state->cover_track, state->title_text,
-            sizeof(state->cover_track) - 1);
-    state->cover_track[sizeof(state->cover_track) - 1] = '\0';
-    prv_request_cover(state);
+  // Keyed on the artwork, not the track: playing an album through keeps the
+  // same coverid, so the sleeve is fetched once instead of once per song.
+  if (strncmp(state->cover_id, status->cover_id, LMS_COVER_ID_LEN) == 0)
+    return;
+
+  strncpy(state->cover_id, status->cover_id, sizeof(state->cover_id) - 1);
+  state->cover_id[sizeof(state->cover_id) - 1] = '\0';
+
+  if (state->cover_id[0] == '\0') {
+    prv_drop_cover(state);  // this track has no artwork
+    return;
   }
+  prv_request_cover(state, state->cover_id);
 }
 
 static void prv_on_refresh_timer(void *ctx) {

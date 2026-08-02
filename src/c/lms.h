@@ -43,11 +43,20 @@ typedef struct {
   bool playing;
 } LMSPlayer;
 
+/** Identifies the artwork, not the track -- see LMSStatus.cover_id. */
+#define LMS_COVER_ID_LEN 24
+
 typedef struct {
   char artist[LMS_TRACK_LEN];
   char title[LMS_TRACK_LEN];
   int volume;
   bool playing;
+  /**
+   * LMS's coverid for the current track. It changes when the artwork does, not
+   * when the track does, so playing an album through does not re-fetch the same
+   * sleeve twelve times. Empty when the track has no artwork.
+   */
+  char cover_id[LMS_COVER_ID_LEN];
 } LMSStatus;
 
 /**
@@ -114,13 +123,16 @@ void lms_menu_go(const char *player_id, const char *item_id,
                  LMSDoneHandler handler, void *context);
 
 /**
- * Asks for the current track's cover, scaled server-side to `edge` square.
+ * Asks for a cover by id, scaled server-side to `edge` square.
  *
  * The handler runs once the phone has the image decoded and ready, and reports
  * how much is coming. The pixels themselves arrive afterwards through the
  * chunk handler registered with comm_set_image_handler().
+ *
+ * Naming the artwork outright rather than asking for "whatever is playing"
+ * means a track change between request and response cannot swap the image.
  */
-void lms_cover(const char *player_id, int edge, LMSCoverHandler handler,
+void lms_cover(const char *cover_id, int edge, LMSCoverHandler handler,
                void *context);
 
 /**

@@ -112,7 +112,13 @@ function encodePlayers(json) {
   return out.join(RECORD);
 }
 
-/** artist<FIELD>title<FIELD>volume<FIELD>playing */
+/**
+ * artist<FIELD>title<FIELD>volume<FIELD>playing<FIELD>coverid
+ *
+ * The coverid identifies the artwork rather than the track, so the watch can
+ * tell "same sleeve, next song" from "new sleeve" and skip a transfer it does
+ * not need. It comes from the "c" tag.
+ */
 function encodeStatus(json) {
   var r = json.result || {};
   var track = (r.playlist_loop && r.playlist_loop[0]) || {};
@@ -120,7 +126,8 @@ function encodeStatus(json) {
     track.artist || r.artist || "",
     track.title || r.title || r.current_title || "",
     String(r["mixer volume"] || 0),
-    r.mode === "play" ? "1" : "0"
+    r.mode === "play" ? "1" : "0",
+    track.coverid || track.artwork_track_id || ""
   ].join(FIELD);
 }
 
@@ -231,13 +238,16 @@ function serverRoot() {
 
 /**
  * LMS resizes server-side, which saves the decoder nearly all of its work: a
- * 120x120 JPEG is under 4 KB where the original is half a megabyte. Mode "_p"
+ * 132x132 JPEG is under 4 KB where the original is half a megabyte. Mode "_p"
  * pads to exactly the requested square, so the watch gets what it asked for.
- * "current" plus a player id spares us tracking the coverid ourselves.
+ *
+ * Addressed by coverid rather than "current": the watch asks for the artwork it
+ * saw in a status response, and naming it outright means a track change between
+ * the two cannot swap the image underneath the request.
  */
-function coverUrl(player, edge) {
-  return serverRoot() + "/music/current/cover_" + edge + "x" + edge +
-    "_p.jpg?player=" + encodeURIComponent(player);
+function coverUrl(coverId, edge) {
+  return serverRoot() + "/music/" + encodeURIComponent(coverId) +
+    "/cover_" + edge + "x" + edge + "_p.jpg";
 }
 
 /**
@@ -292,7 +302,7 @@ function sendCoverChunks(data, offset) {
   });
 }
 
-function handleCover(id, player, edge) {
+function handleCover(id, coverId, edge) {
   if (coverInFlight) {
     reply(id, "busy", "");
     return;
@@ -300,7 +310,7 @@ function handleCover(id, player, edge) {
   coverInFlight = true;
 
   var xhr = new XMLHttpRequest();
-  xhr.open("GET", coverUrl(player, edge), true);
+  xhr.open("GET", coverUrl(coverId, edge), true);
   xhr.responseType = "arraybuffer";
   xhr.timeout = 8000;
   if (settings.password && typeof btoa === "function") {
@@ -355,7 +365,7 @@ function handle(id, op, arg) {
   }
 
   if (op === "status") {
-    rpc(arg, ["status", "-", 1, "tags:al"], function (err, json) {
+    rpc(arg, ["status", "-", 1, "tags:alc"], function (err, json) {
       reply(id, err, err ? "" : encodeStatus(json));
     });
     return;

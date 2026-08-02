@@ -145,6 +145,7 @@ static void prv_on_status(const char *err, const char *data, void *context) {
   const char *playing = prv_take(&field, LMS_FIELD);
   status.volume = volume ? atoi(volume) : 0;
   status.playing = playing && playing[0] == '1';
+  prv_copy(status.cover_id, LMS_COVER_ID_LEN, prv_take(&field, LMS_FIELD));
 
   if (handler)
     handler(NULL, &status, user_context);
@@ -332,7 +333,7 @@ void lms_menu_go(const char *player_id, const char *item_id,
   }
 }
 
-void lms_cover(const char *player_id, int edge, LMSCoverHandler handler,
+void lms_cover(const char *cover_id, int edge, LMSCoverHandler handler,
                void *context) {
   Request *r = prv_take_slot();
   if (!r) {
@@ -344,7 +345,7 @@ void lms_cover(const char *player_id, int edge, LMSCoverHandler handler,
   r->user_context = context;
 
   char arg[160];
-  snprintf(arg, sizeof(arg), "%s%c%d", player_id, LMS_FIELD, edge);
+  snprintf(arg, sizeof(arg), "%s%c%d", cover_id, LMS_FIELD, edge);
 
   if (!comm_request("cover", arg, prv_on_cover, r)) {
     r->used = false;
