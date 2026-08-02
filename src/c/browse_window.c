@@ -87,6 +87,17 @@ static char s_saved_player[LMS_ID_LEN];
 // jump to the player from the user backing out of the root by hand.
 static bool s_closing;
 
+/**
+ * Set while a saved path is being pushed back on.
+ *
+ * Levels normally fetch their first page as they load. Restoring pushes the
+ * whole path at once, so that fired one request per level simultaneously and
+ * ran the relay out of slots -- four, between lms.c and comm.c -- which came
+ * back as "busy" on reopening. Only the level the user ends up looking at is
+ * fetched now; the ones underneath load if and when Back reaches them.
+ */
+static bool s_restoring;
+
 static void prv_push(const char *player_id, const char *req_id, bool node,
                      const char *title, uint16_t selected, bool restored);
 static void prv_load_page(BrowseWindow *state, int start);
@@ -349,12 +360,18 @@ static void prv_window_load(Window *window) {
   menu_layer_set_click_config_onto_window(state->menu, window);
   layer_add_child(root, menu_layer_get_layer(state->menu));
 
-  prv_load_page(state, 0);
+  if (!s_restoring)
+    prv_load_page(state, 0);
 }
 
 static void prv_window_appear(Window *window) {
   BrowseWindow *state = window_get_user_data(window);
   ui_marquee_set_menu(state->menu);
+
+  // A restored level below the top has nothing yet; this is where it gets it,
+  // once Back actually brings the user to it.
+  if (!s_restoring && !state->have_total && !state->loading)
+    prv_load_page(state, 0);
 }
 
 static void prv_window_disappear(Window *window) {
@@ -432,9 +449,14 @@ void browse_window_push_root(const char *player_id) {
   memcpy(path, s_saved, sizeof(SavedLevel) * depth);
   prv_forget_path();
 
+  s_restoring = true;
   for (int i = 0; i < depth; i++)
     prv_push(player_id, path[i].req_id, path[i].node, path[i].title,
              path[i].selected, true);
+  s_restoring = false;
+
+  if (s_level_count > 0)
+    prv_load_page(s_levels[s_level_count - 1], 0);
 }
 
 void browse_close_all(void) {
