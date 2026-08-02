@@ -169,11 +169,13 @@ function encodeStatus(json) {
   ].join(FIELD);
 }
 
-function reply(id, err, data, onSent) {
+function reply(id, err, data, onSent, onFailed) {
   var payload = { RS_ID: id, RS_ERR: err ? String(err) : "" };
   payload.RS_DATA = data ? String(data).substring(0, MAX_DATA) : "";
   Pebble.sendAppMessage(payload, onSent || function () {}, function (e) {
     console.log("sendAppMessage failed: " + JSON.stringify(e));
+    if (onFailed)
+      onFailed();
   });
 }
 
@@ -376,8 +378,11 @@ function handleCover(id, key, width, height) {
   }
   coverInFlight = true;
 
+  var url = coverUrl(key, width);
+  console.log("cover " + key + " " + width + "x" + height + " <- " + url);
+
   var xhr = new XMLHttpRequest();
-  xhr.open("GET", coverUrl(key, width), true);
+  xhr.open("GET", url, true);
   xhr.responseType = "arraybuffer";
   xhr.timeout = 8000;
   if (settings.password && typeof btoa === "function") {
@@ -389,6 +394,7 @@ function handleCover(id, key, width, height) {
 
   function fail(message) {
     coverInFlight = false;
+    console.log("cover failed: " + message);
     reply(id, message, "");
   }
 
@@ -412,11 +418,18 @@ function handleCover(id, key, width, height) {
       return fail("decode: " + e.message);
     }
 
+    console.log("cover decoded " + raw.width + "x" + raw.height + " -> " +
+                data.length + " bytes, " +
+                Math.ceil(data.length / COVER_CHUNK) + " chunks");
+
     // The reply is the header. Chunks start only once it has landed, or the
-    // two sends would collide in the outbox.
+    // two sends would collide in the outbox. Clearing the flag if that send
+    // fails matters: without it one lost header wedges coverInFlight true and
+    // every later request answers "busy" for the rest of the session.
     reply(id, null, [width, height, data.length,
                      Math.ceil(data.length / COVER_CHUNK)].join(FIELD),
-          function () { sendCoverChunks(data, 0); });
+          function () { sendCoverChunks(data, 0); },
+          function () { coverInFlight = false; });
   };
   xhr.onerror = function () { fail("network error"); };
   xhr.ontimeout = function () { fail("timeout"); };
