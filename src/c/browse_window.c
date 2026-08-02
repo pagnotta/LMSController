@@ -48,6 +48,8 @@ typedef struct BrowseWindow {
   int total;                 //!< rows at this level, from the server
 
   int requested_start;       //!< start of the fetch in flight
+  uint16_t restore_row;      //!< selection to reinstate once the level loads
+  bool restored;             //!< came from the saved path, not from a tap
   bool have_total;
   bool loading;
   char message[40];          //!< shown while the level has no rows yet
@@ -56,9 +58,43 @@ typedef struct BrowseWindow {
 static BrowseWindow *s_levels[MAX_LEVELS];
 static int s_level_count;
 
+/**
+ * Where the user was when playback took them away.
+ *
+ * Starting a track closes the whole menu, and coming back at the root meant
+ * walking the tree again just to reach the album next to the one that was
+ * picked -- which is the commonest thing to want.
+ *
+ * Only remembered across that jump, not across leaving the menu by hand: if
+ * the user walked out level by level, they meant to leave. And only within one
+ * run of the app -- these ids are keys into cachedMenu on the phone, which is
+ * torn down with the app, so a path from a previous run would resolve to
+ * nothing. A level that fails to load throws the path away and leaves the user
+ * where they are.
+ */
+typedef struct {
+  char req_id[LMS_ID_LEN];
+  char title[LMS_TEXT_LEN];
+  bool node;
+  uint16_t selected;
+} SavedLevel;
+
+static SavedLevel s_saved[MAX_LEVELS];
+static int s_saved_depth;
+static char s_saved_player[LMS_ID_LEN];
+
+// Set while browse_close_all() is unwinding, so the unload handler can tell a
+// jump to the player from the user backing out of the root by hand.
+static bool s_closing;
+
 static void prv_push(const char *player_id, const char *req_id, bool node,
-                     const char *title);
+                     const char *title, uint16_t selected, bool restored);
 static void prv_load_page(BrowseWindow *state, int start);
+
+static void prv_forget_path(void) {
+  s_saved_depth = 0;
+  s_saved_player[0] = '\0';
+}
 
 /** True when `row` is one of the items currently in memory. */
 static bool prv_row_loaded(const BrowseWindow *state, int row) {
@@ -173,6 +209,10 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
     snprintf(state->message, sizeof(state->message), "Error: %s", err);
     if (!state->have_total)
       menu_layer_reload_data(state->menu);
+    // A restored level that will not load means the phone no longer knows
+    // these ids. Keeping the path would fail the same way every time.
+    if (state->restored)
+      prv_forget_path();
     return;
   }
 
@@ -185,6 +225,16 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
     strncpy(state->message, "Empty", sizeof(state->message) - 1);
 
   menu_layer_reload_data(state->menu);
+
+  // Reinstating the row has to wait for the total: before that the list has one
+  // message row and any index would be clamped to it.
+  if (state->restore_row) {
+    menu_layer_set_selected_index(state->menu,
+                                  MenuIndex(0, state->restore_row), MenuRowAlignCenter,
+                                  false);
+    state->restore_row = 0;
+  }
+
   prv_ensure_selection_loaded(state);
 }
 
@@ -269,7 +319,7 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
     case LMSItemNode:
     case LMSItemCmd:
       prv_push(state->player_id, item->id, item->kind == LMSItemNode,
-               item->text);
+               item->text, 0, false);
       break;
     case LMSItemPlay:
       lms_menu_go(state->player_id, item->id, prv_on_played, state);
@@ -324,13 +374,18 @@ static void prv_window_unload(Window *window) {
     }
   }
 
+  // Backing out of the root by hand means the user meant to leave; only the
+  // jump to the player is worth resuming.
+  if (!s_closing && s_level_count == 0)
+    prv_forget_path();
+
   menu_layer_destroy(state->menu);
   window_destroy(state->window);
   free(state);
 }
 
 static void prv_push(const char *player_id, const char *req_id, bool node,
-                     const char *title) {
+                     const char *title, uint16_t selected, bool restored) {
   if (s_level_count >= MAX_LEVELS)
     return;
 
@@ -344,6 +399,8 @@ static void prv_push(const char *player_id, const char *req_id, bool node,
   strncpy(state->title, title, sizeof(state->title) - 1);
   strncpy(state->message, "Loading...", sizeof(state->message) - 1);
   state->node = node;
+  state->restore_row = selected;
+  state->restored = restored;
 
   state->window = window_create();
   window_set_user_data(state->window, state);
@@ -360,13 +417,50 @@ static void prv_push(const char *player_id, const char *req_id, bool node,
 }
 
 void browse_window_push_root(const char *player_id) {
-  prv_push(player_id, "home", true, "LMS");
+  // A path belongs to the player it was walked for.
+  if (s_saved_depth > 0 && strcmp(s_saved_player, player_id) != 0)
+    prv_forget_path();
+
+  if (s_saved_depth == 0) {
+    prv_push(player_id, "home", true, "LMS", 0, false);
+    return;
+  }
+
+  // Rebuilt from the root up, so Back still walks out the way it came in.
+  const int depth = s_saved_depth;
+  SavedLevel path[MAX_LEVELS];
+  memcpy(path, s_saved, sizeof(SavedLevel) * depth);
+  prv_forget_path();
+
+  for (int i = 0; i < depth; i++)
+    prv_push(player_id, path[i].req_id, path[i].node, path[i].title,
+             path[i].selected, true);
 }
 
 void browse_close_all(void) {
+  // Snapshot before unwinding: this is the jump to the player, and coming back
+  // at the root is exactly what makes picking a second album tedious.
+  s_saved_depth = 0;
+  for (int i = 0; i < s_level_count && i < MAX_LEVELS; i++) {
+    BrowseWindow *level = s_levels[i];
+    strncpy(s_saved[i].req_id, level->req_id, sizeof(s_saved[i].req_id) - 1);
+    s_saved[i].req_id[sizeof(s_saved[i].req_id) - 1] = '\0';
+    strncpy(s_saved[i].title, level->title, sizeof(s_saved[i].title) - 1);
+    s_saved[i].title[sizeof(s_saved[i].title) - 1] = '\0';
+    s_saved[i].node = level->node;
+    s_saved[i].selected = menu_layer_get_selected_index(level->menu).row;
+    s_saved_depth++;
+  }
+  if (s_saved_depth > 0) {
+    strncpy(s_saved_player, s_levels[0]->player_id, sizeof(s_saved_player) - 1);
+    s_saved_player[sizeof(s_saved_player) - 1] = '\0';
+  }
+
   // Each removal unloads its window, which takes the level back out of
   // s_levels -- hence the loop condition rather than an index walk.
+  s_closing = true;
   int guard = MAX_LEVELS + 1;
   while (s_level_count > 0 && guard-- > 0)
     window_stack_remove(s_levels[s_level_count - 1]->window, false);
+  s_closing = false;
 }
