@@ -26,6 +26,22 @@
 // LMS needs a moment to act on a command before `status` reports the result.
 #define REFRESH_DELAY_MS 600
 
+/**
+ * How often the status is re-read while this screen is up.
+ *
+ * Polling rather than reacting to a track change, because there is nothing to
+ * react to: plain JSON-RPC has no push, and LMS's push channel is CometD long
+ * polling, which is a great deal of machinery to run from PebbleKit JS. A
+ * status query is a few hundred bytes, so asking now and then is the cheaper
+ * trade -- and it is what makes a radio station's title, artist and artwork
+ * appear without stopping and starting playback by hand.
+ *
+ * Only ever while the screen is actually on top, and slower when nothing is
+ * playing, since then the only thing that can change is somebody else's doing.
+ */
+#define POLL_PLAYING_MS 10000
+#define POLL_IDLE_MS    30000
+
 #define TEXT_STATE_H  28
 #define TEXT_TITLE_H  34
 #define TEXT_ARTIST_H 28
@@ -64,6 +80,7 @@ typedef struct {
 static StatusWindow *s_state;
 
 static void prv_request_status(StatusWindow *state);
+static void prv_schedule_refresh(StatusWindow *state, uint32_t delay_ms);
 
 // --- cover -----------------------------------------------------------------
 
@@ -143,8 +160,14 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   if (err) {
     snprintf(state->state_text, sizeof(state->state_text), "Error: %s", err);
     text_layer_set_text(state->state_layer, state->state_text);
+    prv_schedule_refresh(state, POLL_IDLE_MS);  // keep trying, slowly
     return;
   }
+
+  // Every response schedules the next read, so the chain cannot run twice or
+  // stop dead after an error.
+  prv_schedule_refresh(state,
+                       status->playing ? POLL_PLAYING_MS : POLL_IDLE_MS);
 
   strncpy(state->artist_text, status->artist[0] ? status->artist : "—",
           sizeof(state->artist_text) - 1);
@@ -182,16 +205,16 @@ static void prv_on_refresh_timer(void *ctx) {
   prv_request_status(state);
 }
 
-static void prv_request_status(StatusWindow *state) {
-  lms_status(state->player_id, prv_on_status, state);
-}
-
-/** Re-reads the status shortly after a command, once LMS has acted on it. */
-static void prv_refresh_soon(StatusWindow *state) {
+/** Replaces whatever refresh was pending with one in `delay_ms`. */
+static void prv_schedule_refresh(StatusWindow *state, uint32_t delay_ms) {
   if (state->refresh_timer)
     app_timer_cancel(state->refresh_timer);
   state->refresh_timer =
-      app_timer_register(REFRESH_DELAY_MS, prv_on_refresh_timer, state);
+      app_timer_register(delay_ms, prv_on_refresh_timer, state);
+}
+
+static void prv_request_status(StatusWindow *state) {
+  lms_status(state->player_id, prv_on_status, state);
 }
 
 static void prv_on_command(const char *err, void *ctx) {
@@ -201,7 +224,7 @@ static void prv_on_command(const char *err, void *ctx) {
     text_layer_set_text(state->state_layer, state->state_text);
     return;
   }
-  prv_refresh_soon(state);
+  prv_schedule_refresh(state, REFRESH_DELAY_MS);
 }
 
 static void prv_send(StatusWindow *state, const char *command) {
@@ -328,8 +351,14 @@ static void prv_window_appear(Window *window) {
 }
 
 static void prv_window_disappear(Window *window) {
+  StatusWindow *state = window_get_user_data(window);
   touch_service_unsubscribe();
   comm_set_image_handler(NULL, NULL);
+  // No polling behind the LMS menu or the player list.
+  if (state->refresh_timer) {
+    app_timer_cancel(state->refresh_timer);
+    state->refresh_timer = NULL;
+  }
 }
 
 static void prv_window_unload(Window *window) {

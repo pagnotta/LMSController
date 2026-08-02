@@ -440,7 +440,9 @@ function handle(id, op, arg) {
   }
 
   if (op === "status") {
-    rpc(arg, ["status", "-", 1, "tags:alc"], function (err, json) {
+    // "K" is what carries artwork_url, and without it remote tracks look like they
+    // have no artwork at all -- see coverKey().
+    rpc(arg, ["status", "-", 1, "tags:alcK"], function (err, json) {
       reply(id, err, err ? "" : encodeStatus(json));
     });
     return;
