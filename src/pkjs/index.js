@@ -26,10 +26,42 @@ var FIELD = "\u001f";
 // need a chunking extension to the protocol.
 var MAX_DATA = 512;
 
-// Maps itemId -> { item: <LMS item>, base: <the response's base object> }.
+// Maps our own key -> { item: <LMS item>, base: <the response's base object> }.
 // The base has to be kept: LMS puts the actions for a whole list there, not
 // into the items (see resolveAction).
 var cachedMenu = {};
+
+/**
+ * Keys are ours, not LMS's, because LMS ids do not survive being used as such.
+ *
+ * Deezer items carry no id at all -- their identity is in
+ * actions.go.params.item_id -- so they used to fall back to the index within
+ * the page that was returned. LMS honours start/limit, so that index is 0..9
+ * for every page, and page 1 overwrote page 0's entries: rows that were still
+ * on screen quietly started pointing at the next page's items.
+ *
+ * browselibrary is no better. It hands out the position within the level
+ * ("20", "21", ...), which repeats in every other level, and this map is shared
+ * by the whole tree.
+ *
+ * A counter has neither problem. The watch treats the key as opaque and hands
+ * it back, so the shape does not matter -- only that it is unique.
+ */
+var nextItemKey = 1;
+var cachedMenuOrder = [];
+
+// Roughly what ten open levels can have on screen and cached, with room to
+// spare. Bounded so a long browse does not grow the map forever.
+var MAX_CACHED_ITEMS = 800;
+
+function cacheItem(item, base) {
+  var key = "i" + (nextItemKey++);
+  cachedMenu[key] = { item: item, base: base };
+  cachedMenuOrder.push(key);
+  if (cachedMenuOrder.length > MAX_CACHED_ITEMS)
+    delete cachedMenu[cachedMenuOrder.shift()];
+  return key;
+}
 
 
 var DEFAULTS = {
@@ -240,13 +272,15 @@ function classify(item, base) {
 }
 
 /** One line per item, cut on a record boundary so no half record is sent. */
-function encodeItems(loop, base, reqId, start, limit, total) {
+function encodeItems(loop, base, start, limit, total) {
   var out = String(total);
   var budget = MAX_DATA;
   for (var i = start; i < start + limit && i < loop.length; i++) {
     var item = loop[i];
-    var itemId = item.id || ("_" + reqId + "_" + i);
-    cachedMenu[itemId] = { item: item, base: base };
+    // A node is looked up by name, not through the cache: the node branch
+    // re-reads the home menu and filters on item.node, so that one id has to
+    // stay LMS's own.
+    var itemId = item.isANode ? (item.id || "") : cacheItem(item, base);
 
     // Album titles arrive as "album\nartist"; the watch shows a single line.
     var text = String(item.text || item.name || item.title || "?")
@@ -498,7 +532,7 @@ function handle(id, op, arg) {
                 return;
             }
             loop = loop.filter(function(i) { return i.node === reqId; });
-            reply(id, "", encodeItems(loop, json.result.base, reqId, start, limit, loop.length));
+            reply(id, "", encodeItems(loop, json.result.base, start, limit, loop.length));
         });
     } else if (reqType === "cmd") {
         var parent = cachedMenu[reqId];
@@ -525,7 +559,7 @@ function handle(id, op, arg) {
             // `count` is the total for the level; without it the caller cannot
             // tell the end of the list from a page that was cut for size.
             var total = (result.count === undefined) ? (sliceStart + loop.length) : parseInt(result.count, 10);
-            reply(id, "", encodeItems(loop, result.base, reqId, sliceStart, limit, total));
+            reply(id, "", encodeItems(loop, result.base, sliceStart, limit, total));
         });
     }
     return;
