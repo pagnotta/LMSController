@@ -245,32 +245,37 @@ function serverRoot() {
  * saw in a status response, and naming it outright means a track change between
  * the two cannot swap the image underneath the request.
  */
-function coverUrl(coverId, edge) {
+function coverUrl(coverId, width) {
   return serverRoot() + "/music/" + encodeURIComponent(coverId) +
-    "/cover_" + edge + "x" + edge + "_p.jpg";
+    "/cover_" + width + "x" + width + "_p.jpg";
 }
 
 /**
- * RGBA to ARGB2222: two bits per channel, alpha always full.
+ * RGBA to ARGB2222 -- two bits per channel, alpha always full -- scaled to fill
+ * the width and cropped at the bottom.
  *
- * The source should already be the right size, but a plugin or an older LMS
- * might ignore the resize, so this scales to cover and centres rather than
- * trusting the dimensions.
+ * The watch asks for the full screen width and only the height its layout has
+ * free, so the lower part of the square sleeve is dropped here. Sending the
+ * whole square and clipping on the watch would spend Bluetooth time on rows
+ * that are never drawn.
+ *
+ * The source should already be the right width, but a plugin or an older LMS
+ * might ignore the resize, hence scaling rather than trusting the dimensions.
  */
-function toARGB2222(pixels, srcW, srcH, edge) {
-  var out = new Uint8Array(edge * edge);
-  var scale = Math.max(edge / srcW, edge / srcH);
-  var offsetX = (edge - srcW * scale) / 2;
-  var offsetY = (edge - srcH * scale) / 2;
+function toARGB2222(pixels, srcW, srcH, dstW, dstH) {
+  var out = new Uint8Array(dstW * dstH);
+  var scale = dstW / srcW;
 
-  for (var y = 0; y < edge; y++) {
-    for (var x = 0; x < edge; x++) {
-      var sx = Math.floor((x - offsetX) / scale);
-      var sy = Math.floor((y - offsetY) / scale);
-      if (sx < 0 || sx >= srcW || sy < 0 || sy >= srcH)
-        continue;  // stays 0, which the watch draws as transparent
+  for (var y = 0; y < dstH; y++) {
+    var sy = Math.floor(y / scale);
+    if (sy >= srcH)
+      break;  // the rest stays 0, which the watch draws as transparent
+    for (var x = 0; x < dstW; x++) {
+      var sx = Math.floor(x / scale);
+      if (sx >= srcW)
+        continue;
       var i = (sy * srcW + sx) * 4;
-      out[y * edge + x] = 0xC0 | ((pixels[i] >> 6) << 4) |
+      out[y * dstW + x] = 0xC0 | ((pixels[i] >> 6) << 4) |
         ((pixels[i + 1] >> 6) << 2) | (pixels[i + 2] >> 6);
     }
   }
@@ -302,7 +307,7 @@ function sendCoverChunks(data, offset) {
   });
 }
 
-function handleCover(id, coverId, edge) {
+function handleCover(id, coverId, width, height) {
   if (coverInFlight) {
     reply(id, "busy", "");
     return;
@@ -310,7 +315,7 @@ function handleCover(id, coverId, edge) {
   coverInFlight = true;
 
   var xhr = new XMLHttpRequest();
-  xhr.open("GET", coverUrl(coverId, edge), true);
+  xhr.open("GET", coverUrl(coverId, width), true);
   xhr.responseType = "arraybuffer";
   xhr.timeout = 8000;
   if (settings.password && typeof btoa === "function") {
@@ -332,14 +337,14 @@ function handleCover(id, coverId, edge) {
     var data;
     try {
       var raw = jpeg.decode(new Uint8Array(xhr.response), { useTArray: true });
-      data = toARGB2222(raw.data, raw.width, raw.height, edge);
+      data = toARGB2222(raw.data, raw.width, raw.height, width, height);
     } catch (e) {
       return fail("decode: " + e.message);
     }
 
     // The reply is the header. Chunks start only once it has landed, or the
     // two sends would collide in the outbox.
-    reply(id, null, [edge, edge, data.length,
+    reply(id, null, [width, height, data.length,
                      Math.ceil(data.length / COVER_CHUNK)].join(FIELD),
           function () { sendCoverChunks(data, 0); });
   };
@@ -373,7 +378,8 @@ function handle(id, op, arg) {
 
   if (op === "cover") {
     var coverParts = String(arg).split(FIELD);
-    handleCover(id, coverParts[0], parseInt(coverParts[1], 10) || 100);
+    handleCover(id, coverParts[0], parseInt(coverParts[1], 10) || 100,
+                parseInt(coverParts[2], 10) || 100);
     return;
   }
 

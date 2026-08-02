@@ -333,8 +333,8 @@ void lms_menu_go(const char *player_id, const char *item_id,
   }
 }
 
-void lms_cover(const char *cover_id, int edge, LMSCoverHandler handler,
-               void *context) {
+void lms_cover(const char *cover_id, int width, int height,
+               LMSCoverHandler handler, void *context) {
   Request *r = prv_take_slot();
   if (!r) {
     handler("busy", NULL, context);
@@ -345,7 +345,8 @@ void lms_cover(const char *cover_id, int edge, LMSCoverHandler handler,
   r->user_context = context;
 
   char arg[160];
-  snprintf(arg, sizeof(arg), "%s%c%d", cover_id, LMS_FIELD, edge);
+  snprintf(arg, sizeof(arg), "%s%c%d%c%d", cover_id, LMS_FIELD, width,
+           LMS_FIELD, height);
 
   if (!comm_request("cover", arg, prv_on_cover, r)) {
     r->used = false;

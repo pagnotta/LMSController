@@ -123,7 +123,12 @@ void lms_menu_go(const char *player_id, const char *item_id,
                  LMSDoneHandler handler, void *context);
 
 /**
- * Asks for a cover by id, scaled server-side to `edge` square.
+ * Asks for a cover by id, scaled to `width` and cropped to `height`.
+ *
+ * Sleeves are square but the space above the text is not, so the phone scales
+ * the image to the full width and drops whatever falls past `height` off the
+ * bottom. Asking for a square and letting the watch clip would send pixels that
+ * are never drawn.
  *
  * The handler runs once the phone has the image decoded and ready, and reports
  * how much is coming. The pixels themselves arrive afterwards through the
@@ -132,8 +137,8 @@ void lms_menu_go(const char *player_id, const char *item_id,
  * Naming the artwork outright rather than asking for "whatever is playing"
  * means a track change between request and response cannot swap the image.
  */
-void lms_cover(const char *cover_id, int edge, LMSCoverHandler handler,
-               void *context);
+void lms_cover(const char *cover_id, int width, int height,
+               LMSCoverHandler handler, void *context);
 
 /**
  * Forgets every request made with this context.

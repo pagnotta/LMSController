@@ -45,11 +45,19 @@ addition.
 
 ## Cover art
 
-The watch measures the space its layout leaves above the text and asks for a
-square that size. The phone has LMS scale the image server-side
-(`/music/current/cover_<n>x<n>_p.jpg?player=<id>`), which keeps the download
-under 4 KB and the decode cheap, unpacks the JPEG with `jpeg-js`, and quantises
-to ARGB2222 — one byte per pixel, two bits per channel.
+The cover runs the full width of the screen, flush to the top, and as tall as
+the layout leaves free above the text — 200x136 on emery. Sleeves are square,
+so the phone crops the bottom off; sending the whole square and clipping on the
+watch would spend Bluetooth time on rows that are never drawn.
+
+The phone has LMS scale the image server-side
+(`/music/<coverid>/cover_<w>x<w>_p.jpg`), which keeps the download under 4 KB
+and the decode cheap, unpacks the JPEG with `jpeg-js`, and quantises to
+ARGB2222 — one byte per pixel, two bits per channel.
+
+Reloading is keyed on LMS's `coverid`, which identifies the artwork rather than
+the track, so playing an album through fetches the sleeve once instead of once
+per song.
 
 The reply to the request carries the dimensions, so a failed download is
 reported like any other error. The pixels then follow as chunks the phone

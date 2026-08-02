@@ -49,7 +49,8 @@ typedef struct {
   uint32_t cover_capacity;   //!< bytes the GBitmap can hold
   uint32_t cover_expected;
   uint32_t cover_received;
-  int16_t cover_edge;        //!< pixels; 0 means the layout left no room
+  int16_t cover_w;           //!< full screen width
+  int16_t cover_h;           //!< what is free above the text; 0 = no room
   bool cover_receiving;
   char cover_id[LMS_COVER_ID_LEN];  //!< artwork the current cover is
 
@@ -129,9 +130,9 @@ static void prv_on_cover_chunk(uint32_t offset, const uint8_t *data,
 }
 
 static void prv_request_cover(StatusWindow *state, const char *cover_id) {
-  if (state->cover_edge <= 0)
+  if (state->cover_w <= 0 || state->cover_h <= 0)
     return;
-  lms_cover(cover_id, state->cover_edge, prv_on_cover, state);
+  lms_cover(cover_id, state->cover_w, state->cover_h, prv_on_cover, state);
 }
 
 // --- status ----------------------------------------------------------------
@@ -296,17 +297,14 @@ static void prv_window_load(Window *window) {
   text_layer_set_overflow_mode(state->title_layer, GTextOverflowModeTrailingEllipsis);
   text_layer_set_overflow_mode(state->artist_layer, GTextOverflowModeTrailingEllipsis);
 
-  // Square, centred, as tall as the space above the text allows. A round screen
-  // needs more margin or the corners fall off the glass.
-  int16_t edge = artist_y - PBL_IF_ROUND_ELSE(30, 4);
-  if (edge > bounds.size.w)
-    edge = bounds.size.w;
-  if (edge < 0)
-    edge = 0;
-  state->cover_edge = edge;
+  // Full width, flush to the top, and only as tall as the space above the text.
+  // A sleeve is square, so the phone crops the bottom off rather than sending
+  // rows that would be clipped here anyway.
+  state->cover_w = bounds.size.w;
+  state->cover_h = artist_y > 0 ? artist_y : 0;
 
   state->cover_layer = bitmap_layer_create(
-      GRect((bounds.size.w - edge) / 2, (artist_y - edge) / 2, edge, edge));
+      GRect(0, 0, state->cover_w, state->cover_h));
   bitmap_layer_set_background_color(state->cover_layer, GColorClear);
   // ARGB2222 carries alpha, and GCompOpSet is what honours it.
   bitmap_layer_set_compositing_mode(state->cover_layer, GCompOpSet);
