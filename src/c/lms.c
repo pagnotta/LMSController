@@ -146,6 +146,7 @@ static void prv_on_status(const char *err, const char *data, void *context) {
   status.volume = volume ? atoi(volume) : 0;
   status.playing = playing && playing[0] == '1';
   prv_copy(status.cover_id, LMS_COVER_ID_LEN, prv_take(&field, LMS_FIELD));
+  prv_copy(status.album, LMS_TRACK_LEN, prv_take(&field, LMS_FIELD));
 
   if (handler)
     handler(NULL, &status, user_context);

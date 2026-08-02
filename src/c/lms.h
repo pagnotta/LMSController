@@ -57,6 +57,7 @@ typedef struct {
    * sleeve twelve times. Empty when the track has no artwork.
    */
   char cover_id[LMS_COVER_ID_LEN];
+  char album[LMS_TRACK_LEN];
 } LMSStatus;
 
 /**

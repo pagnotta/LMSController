@@ -193,7 +193,7 @@ function coverKey(track) {
   return track.coverid || track.artwork_track_id || "";
 }
 
-/** artist<FIELD>title<FIELD>volume<FIELD>playing<FIELD>coverKey */
+/** artist<FIELD>title<FIELD>volume<FIELD>playing<FIELD>coverKey<FIELD>album */
 function encodeStatus(json) {
   var r = json.result || {};
   var track = (r.playlist_loop && r.playlist_loop[0]) || {};
@@ -202,7 +202,8 @@ function encodeStatus(json) {
     track.title || r.title || r.current_title || "",
     String(r["mixer volume"] || 0),
     r.mode === "play" ? "1" : "0",
-    coverKey(track)
+    coverKey(track),
+    track.album || ""
   ].join(FIELD);
 }
 

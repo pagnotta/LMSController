@@ -53,22 +53,41 @@
 #define POLL_PLAYING_MS 10000
 #define POLL_IDLE_MS    30000
 
-#define TEXT_STATE_H  28
+/**
+ * Line heights, and the reasoning behind them.
+ *
+ * Title and artist are the same size and differ by weight. A step from 28 to
+ * 24 is too small to read as a hierarchy on a 200 px screen but large enough
+ * to make the second line hard to read -- the worst of both. Bold against
+ * regular at one size is unambiguous and leaves both legible at arm's length.
+ *
+ * The status line is the one that gives up space: it is transient and only
+ * matters while it is being changed.
+ *
+ * Together 92 px against the 90 the previous three lines took, so the cover
+ * loses two pixels for it.
+ */
+#define TEXT_STATE_H  24
 #define TEXT_TITLE_H  34
-#define TEXT_ARTIST_H 28
+#define TEXT_ARTIST_H 34
 
 typedef struct {
   Window *window;
-  TextLayer *artist_layer;
-  TextLayer *title_layer;
+  MarqueeLabel *artist_layer;
+  MarqueeLabel *title_layer;
   TextLayer *state_layer;
   BitmapLayer *cover_layer;
 
   char player_id[LMS_ID_LEN];
   char player_name[LMS_NAME_LEN];
 
-  char artist_text[LMS_TRACK_LEN];
   char title_text[LMS_TRACK_LEN];
+  /**
+   * "Artist - Album". They share a line because it scrolls anyway, so the album
+   * costs no height at all -- and a third line of its own would be the worst
+   * use of 34 px on this screen, the album being the least urgent of the three.
+   */
+  char artist_text[LMS_TRACK_LEN * 2 + 4];
   char state_text[40];
 
   GBitmap *cover;
@@ -180,9 +199,12 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   prv_schedule_refresh(state,
                        status->playing ? POLL_PLAYING_MS : POLL_IDLE_MS);
 
-  strncpy(state->artist_text, status->artist[0] ? status->artist : "—",
-          sizeof(state->artist_text) - 1);
-  state->artist_text[sizeof(state->artist_text) - 1] = '\0';
+  if (status->album[0] && status->artist[0])
+    snprintf(state->artist_text, sizeof(state->artist_text), "%s - %s",
+             status->artist, status->album);
+  else
+    snprintf(state->artist_text, sizeof(state->artist_text), "%s",
+             status->artist[0] ? status->artist : status->album);
 
   strncpy(state->title_text, status->title[0] ? status->title : "Nothing playing",
           sizeof(state->title_text) - 1);
@@ -191,8 +213,8 @@ static void prv_on_status(const char *err, const LMSStatus *status, void *ctx) {
   snprintf(state->state_text, sizeof(state->state_text), "%s   Vol %d",
            status->playing ? "Playing" : "Paused", status->volume);
 
-  text_layer_set_text(state->artist_layer, state->artist_text);
-  text_layer_set_text(state->title_layer, state->title_text);
+  marquee_label_set_text(state->artist_layer, state->artist_text);
+  marquee_label_set_text(state->title_layer, state->title_text);
   text_layer_set_text(state->state_layer, state->state_text);
 
   // Keyed on the artwork, not the track: playing an album through keeps the
@@ -323,15 +345,21 @@ static void prv_window_load(Window *window) {
   const int16_t title_y = state_y - TEXT_TITLE_H;
   const int16_t artist_y = title_y - TEXT_ARTIST_H;
 
-  state->artist_layer = prv_make_label(root, GRect(inset, artist_y, width, TEXT_ARTIST_H),
-                                       FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
-  state->title_layer = prv_make_label(root, GRect(inset, title_y, width, TEXT_TITLE_H),
-                                      FONT_KEY_GOTHIC_28_BOLD, UI_COLOR_FOREGROUND);
-  state->state_layer = prv_make_label(root, GRect(inset, state_y, width, TEXT_STATE_H),
-                                      FONT_KEY_GOTHIC_24, UI_COLOR_FOREGROUND);
+  const GTextAlignment align =
+      PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft);
 
-  text_layer_set_overflow_mode(state->title_layer, GTextOverflowModeTrailingEllipsis);
-  text_layer_set_overflow_mode(state->artist_layer, GTextOverflowModeTrailingEllipsis);
+  // Same size, different weight: that is the whole hierarchy.
+  state->title_layer = marquee_label_create(
+      GRect(inset, title_y, width, TEXT_TITLE_H), FONT_KEY_GOTHIC_28_BOLD,
+      UI_COLOR_FOREGROUND, align);
+  state->artist_layer = marquee_label_create(
+      GRect(inset, artist_y, width, TEXT_ARTIST_H), FONT_KEY_GOTHIC_28,
+      UI_COLOR_FOREGROUND, align);
+  layer_add_child(root, marquee_label_get_layer(state->title_layer));
+  layer_add_child(root, marquee_label_get_layer(state->artist_layer));
+
+  state->state_layer = prv_make_label(root, GRect(inset, state_y, width, TEXT_STATE_H),
+                                      FONT_KEY_GOTHIC_18, UI_COLOR_MUTED);
 
   // Full width, flush to the top, and only as tall as the space above the text.
   // A sleeve is square, so the phone crops the bottom off rather than sending
@@ -348,9 +376,9 @@ static void prv_window_load(Window *window) {
 
   strncpy(state->title_text, state->player_name, sizeof(state->title_text) - 1);
   strncpy(state->state_text, "Loading...", sizeof(state->state_text) - 1);
-  text_layer_set_text(state->title_layer, state->title_text);
+  marquee_label_set_text(state->title_layer, state->title_text);
+  marquee_label_set_text(state->artist_layer, state->artist_text);
   text_layer_set_text(state->state_layer, state->state_text);
-  text_layer_set_text(state->artist_layer, state->artist_text);
 }
 
 static void prv_window_appear(Window *window) {
@@ -381,8 +409,8 @@ static void prv_window_unload(Window *window) {
     app_timer_cancel(state->refresh_timer);
   prv_drop_cover(state);
   bitmap_layer_destroy(state->cover_layer);
-  text_layer_destroy(state->artist_layer);
-  text_layer_destroy(state->title_layer);
+  marquee_label_destroy(state->artist_layer);
+  marquee_label_destroy(state->title_layer);
   text_layer_destroy(state->state_layer);
   window_destroy(state->window);
   free(state);

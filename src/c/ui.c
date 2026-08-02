@@ -166,3 +166,145 @@ void ui_draw_menu_header(GContext *ctx, const Layer *cell_layer,
                      PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft),
                      NULL);
 }
+
+// --- MarqueeLabel ----------------------------------------------------------
+
+/**
+ * Scrolling single-line labels.
+ *
+ * A fixed pool rather than malloc: the player screen needs two, and a pool
+ * makes the shared timer's bookkeeping trivial -- it walks the array and stops
+ * itself as soon as nothing is left that overflows.
+ */
+#define MARQUEE_LABELS 4
+
+struct MarqueeLabel {
+  Layer *layer;
+  GFont font;
+  GColor color;
+  GTextAlignment alignment;
+  const char *text;    //!< caller-owned, as with TextLayer
+  int16_t offset;
+  int16_t overflow;    //!< px past the edge; 0 means it fits and will not move
+  int16_t hold;
+  bool used;
+};
+
+static struct MarqueeLabel s_labels[MARQUEE_LABELS];
+static AppTimer *s_label_timer;
+
+static void prv_label_tick(void *ctx);
+
+static void prv_label_run(void) {
+  if (!s_label_timer)
+    s_label_timer = app_timer_register(MARQUEE_TICK_MS, prv_label_tick, NULL);
+}
+
+static void prv_label_tick(void *ctx) {
+  s_label_timer = NULL;
+  bool moving = false;
+
+  for (int i = 0; i < MARQUEE_LABELS; i++) {
+    MarqueeLabel *label = &s_labels[i];
+    if (!label->used || label->overflow <= 0)
+      continue;
+    moving = true;
+
+    if (label->hold > 0) {
+      label->hold--;
+    } else if (label->offset < label->overflow) {
+      label->offset += MARQUEE_STEP_PX;
+      if (label->offset >= label->overflow) {
+        label->offset = label->overflow;
+        label->hold = MARQUEE_HOLD_END_TICKS;
+      }
+    } else {
+      label->offset = 0;
+      label->hold = MARQUEE_HOLD_START_TICKS;
+    }
+    layer_mark_dirty(label->layer);
+  }
+
+  if (moving)
+    prv_label_run();
+}
+
+static void prv_label_draw(Layer *layer, GContext *ctx) {
+  MarqueeLabel *label = *(MarqueeLabel **)layer_get_data(layer);
+  if (!label->text || !label->text[0])
+    return;
+
+  const GRect bounds = layer_get_bounds(layer);
+  graphics_context_set_text_color(ctx, label->color);
+
+  const GSize size = graphics_text_layout_get_content_size(
+      label->text, label->font, GRect(0, 0, 2000, bounds.size.h),
+      GTextOverflowModeFill, GTextAlignmentLeft);
+  const int16_t y = (bounds.size.h - size.h) / 2;
+
+  if (size.w > bounds.size.w) {
+    // Scrolling, so no ellipsis and left-aligned whatever the screen shape --
+    // a centred marquee reads as drifting rather than as text being revealed.
+    label->overflow = size.w - bounds.size.w;
+    prv_label_run();
+    graphics_draw_text(ctx, label->text, label->font,
+                       GRect(-label->offset, y, size.w + 4, size.h),
+                       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+    return;
+  }
+
+  label->overflow = 0;
+  graphics_draw_text(ctx, label->text, label->font,
+                     GRect(0, y, bounds.size.w, size.h),
+                     GTextOverflowModeTrailingEllipsis, label->alignment, NULL);
+}
+
+MarqueeLabel *marquee_label_create(GRect frame, const char *font_key,
+                                   GColor color, GTextAlignment alignment) {
+  MarqueeLabel *label = NULL;
+  for (int i = 0; i < MARQUEE_LABELS; i++)
+    if (!s_labels[i].used) {
+      label = &s_labels[i];
+      break;
+    }
+  if (!label)
+    return NULL;
+
+  memset(label, 0, sizeof(*label));
+  label->used = true;
+  label->font = fonts_get_system_font(font_key);
+  label->color = color;
+  label->alignment = alignment;
+
+  label->layer = layer_create_with_data(frame, sizeof(MarqueeLabel *));
+  if (!label->layer) {
+    label->used = false;
+    return NULL;
+  }
+  *(MarqueeLabel **)layer_get_data(label->layer) = label;
+  layer_set_update_proc(label->layer, prv_label_draw);
+  return label;
+}
+
+void marquee_label_destroy(MarqueeLabel *label) {
+  if (!label)
+    return;
+  layer_destroy(label->layer);
+  label->used = false;
+  label->layer = NULL;
+  label->text = NULL;
+}
+
+Layer *marquee_label_get_layer(MarqueeLabel *label) {
+  return label ? label->layer : NULL;
+}
+
+void marquee_label_set_text(MarqueeLabel *label, const char *text) {
+  if (!label)
+    return;
+  label->text = text;
+  label->offset = 0;
+  label->overflow = 0;
+  label->hold = MARQUEE_HOLD_START_TICKS;
+  layer_mark_dirty(label->layer);
+}

@@ -63,3 +63,23 @@ void ui_marquee_set_menu(MenuLayer *menu_layer);
 
 /** Puts the marquee back to the start. Call whenever the selection moves. */
 void ui_marquee_reset(void);
+
+/**
+ * A single line of text that scrolls sideways when it does not fit.
+ *
+ * Track and artist names routinely run past 200 px at a readable size, and a
+ * trailing ellipsis hides exactly the part that tells two of them apart. Unlike
+ * the menu marquee above this is a Layer of its own, so it can be used outside
+ * a MenuLayer; several may scroll at once and they share one timer.
+ *
+ * The text is NOT copied -- the pointer must stay valid, as with TextLayer.
+ */
+typedef struct MarqueeLabel MarqueeLabel;
+
+MarqueeLabel *marquee_label_create(GRect frame, const char *font_key,
+                                   GColor color, GTextAlignment alignment);
+void marquee_label_destroy(MarqueeLabel *label);
+Layer *marquee_label_get_layer(MarqueeLabel *label);
+
+/** Sets the text and returns the line to the start of its travel. */
+void marquee_label_set_text(MarqueeLabel *label, const char *text);
