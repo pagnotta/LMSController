@@ -33,6 +33,19 @@
 /** How close the cursor may come to an unloaded edge before we fetch. */
 #define PREFETCH_MARGIN 4
 
+/**
+ * Levels dropped from the saved path when playback closes the menu.
+ *
+ * Playback is started from deep inside -- a track inside an album inside a
+ * list of albums -- and what is wanted next is another album, which sits two
+ * levels above the track. Tuned by use rather than derived: one level up still
+ * left a folder to re-enter every time.
+ *
+ * Nothing is lost by dropping them. Each remaining level keeps the selection it
+ * had, so the way back down is already under the cursor.
+ */
+#define PATH_DROP_LEVELS 2
+
 typedef struct BrowseWindow {
   Window *window;
   MenuLayer *menu;
@@ -463,13 +476,9 @@ void browse_close_all(void) {
   // Snapshot before unwinding: this is the jump to the player, and coming back
   // at the root is exactly what makes picking a second album tedious.
   //
-  // The deepest level is dropped on purpose. Playback is usually started from
-  // inside a thing -- a track within an album -- and what the user wants next
-  // is the album beside it, which lives one level up. The parent's selection is
-  // already sitting on the folder just visited, so that folder is still right
-  // there under the cursor.
+  // See PATH_DROP_LEVELS for why the last levels are left out.
   s_saved_depth = 0;
-  for (int i = 0; i < s_level_count - 1 && i < MAX_LEVELS; i++) {
+  for (int i = 0; i < s_level_count - PATH_DROP_LEVELS && i < MAX_LEVELS; i++) {
     BrowseWindow *level = s_levels[i];
     strncpy(s_saved[i].req_id, level->req_id, sizeof(s_saved[i].req_id) - 1);
     s_saved[i].req_id[sizeof(s_saved[i].req_id) - 1] = '\0';
