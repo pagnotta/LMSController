@@ -462,8 +462,14 @@ void browse_window_push_root(const char *player_id) {
 void browse_close_all(void) {
   // Snapshot before unwinding: this is the jump to the player, and coming back
   // at the root is exactly what makes picking a second album tedious.
+  //
+  // The deepest level is dropped on purpose. Playback is usually started from
+  // inside a thing -- a track within an album -- and what the user wants next
+  // is the album beside it, which lives one level up. The parent's selection is
+  // already sitting on the folder just visited, so that folder is still right
+  // there under the cursor.
   s_saved_depth = 0;
-  for (int i = 0; i < s_level_count && i < MAX_LEVELS; i++) {
+  for (int i = 0; i < s_level_count - 1 && i < MAX_LEVELS; i++) {
     BrowseWindow *level = s_levels[i];
     strncpy(s_saved[i].req_id, level->req_id, sizeof(s_saved[i].req_id) - 1);
     s_saved[i].req_id[sizeof(s_saved[i].req_id) - 1] = '\0';
