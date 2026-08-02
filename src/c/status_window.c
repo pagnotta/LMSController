@@ -95,9 +95,10 @@ typedef struct {
   uint32_t cover_capacity;   //!< bytes the GBitmap can hold
   uint32_t cover_expected;
   uint32_t cover_received;
-  int16_t cover_w;           //!< full screen width
+  int16_t cover_w;           //!< full screen width; the sleeve is this square
   int16_t cover_h;           //!< what is free above the text; 0 = no room
   bool cover_receiving;
+  bool cover_full;           //!< sleeve shown whole, text hidden
   char cover_id[LMS_COVER_ID_LEN];  //!< artwork the current cover is
 
   int16_t touch_x;
@@ -176,10 +177,36 @@ static void prv_on_cover_chunk(uint32_t offset, const uint8_t *data,
   layer_mark_dirty(bitmap_layer_get_layer(state->cover_layer));
 }
 
+/**
+ * Asks for the sleeve square rather than pre-cropped.
+ *
+ * The compact view wants only the top of it, but cropping on the phone would
+ * mean a second transfer to see the whole thing. A square costs 40 KB against
+ * 27, once per album, and then switching between the two views is a change of
+ * layer frame -- no fetch, no wait. GAlignTop is what makes the short layer
+ * show the top of the taller bitmap.
+ */
 static void prv_request_cover(StatusWindow *state, const char *cover_id) {
   if (state->cover_w <= 0 || state->cover_h <= 0)
     return;
-  lms_cover(cover_id, state->cover_w, state->cover_h, prv_on_cover, state);
+  lms_cover(cover_id, state->cover_w, state->cover_w, prv_on_cover, state);
+}
+
+/** Switches between the sleeve as a header and the sleeve as the whole screen. */
+static void prv_set_cover_full(StatusWindow *state, bool full) {
+  if (state->cover_w <= 0)
+    return;
+  state->cover_full = full;
+
+  const GRect bounds = layer_get_bounds(window_get_root_layer(state->window));
+  layer_set_frame(bitmap_layer_get_layer(state->cover_layer),
+                  full ? GRect(0, (bounds.size.h - state->cover_w) / 2,
+                               state->cover_w, state->cover_w)
+                       : GRect(0, 0, state->cover_w, state->cover_h));
+
+  layer_set_hidden(marquee_label_get_layer(state->title_layer), full);
+  layer_set_hidden(marquee_label_get_layer(state->artist_layer), full);
+  layer_set_hidden(text_layer_get_layer(state->state_layer), full);
 }
 
 // --- status ----------------------------------------------------------------
@@ -303,6 +330,29 @@ static void prv_click_select(ClickRecognizerRef recognizer, void *ctx) {
   browse_window_push_root(state->player_id);
 }
 
+/**
+ * Hold Select for the sleeve on its own.
+ *
+ * A button rather than a long touch: it costs none of the four touch gestures,
+ * there is no timing to disentangle from a tap, and Select already means "more
+ * of this". The back button cannot serve -- the SDK reserves long, multi and
+ * raw handlers there for leaving the app.
+ */
+static void prv_click_select_long(ClickRecognizerRef recognizer, void *ctx) {
+  StatusWindow *state = ctx;
+  prv_set_cover_full(state, !state->cover_full);
+}
+
+/** Back leaves the full sleeve first, and only then the screen. */
+static void prv_click_back(ClickRecognizerRef recognizer, void *ctx) {
+  StatusWindow *state = ctx;
+  if (state->cover_full) {
+    prv_set_cover_full(state, false);
+    return;
+  }
+  window_stack_pop(true);
+}
+
 static void prv_click_up(ClickRecognizerRef recognizer, void *ctx) {
   prv_send(ctx, VOLUME_UP);
 }
@@ -313,8 +363,10 @@ static void prv_click_down(ClickRecognizerRef recognizer, void *ctx) {
 
 static void prv_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_SELECT, prv_click_select);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, prv_click_select_long, NULL);
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 200, prv_click_up);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 200, prv_click_down);
+  window_single_click_subscribe(BUTTON_ID_BACK, prv_click_back);
 }
 
 // --- window ----------------------------------------------------------------
@@ -370,6 +422,9 @@ static void prv_window_load(Window *window) {
   state->cover_layer = bitmap_layer_create(
       GRect(0, 0, state->cover_w, state->cover_h));
   bitmap_layer_set_background_color(state->cover_layer, GColorClear);
+  // The bitmap is square and this layer is shorter, so the alignment is what
+  // decides which part shows: the top, as a sleeve wants to be cropped.
+  bitmap_layer_set_alignment(state->cover_layer, GAlignTop);
   // ARGB2222 carries alpha, and GCompOpSet is what honours it.
   bitmap_layer_set_compositing_mode(state->cover_layer, GCompOpSet);
   layer_add_child(root, bitmap_layer_get_layer(state->cover_layer));
