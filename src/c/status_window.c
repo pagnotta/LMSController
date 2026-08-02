@@ -23,6 +23,17 @@
 #define VOLUME_UP   "mixer volume +5"
 #define VOLUME_DOWN "mixer volume -5"
 
+/**
+ * Track skipping.
+ *
+ * Deliberately not "button jump_fwd"/"jump_rew": those are the CD-player
+ * buttons, and jump_rew rewinds to the start of the current track before it
+ * will go anywhere, so the first swipe appeared to do nothing but restart the
+ * song. "playlist index" moves by one entry and nothing else.
+ */
+#define TRACK_NEXT     "playlist index +1"
+#define TRACK_PREVIOUS "playlist index -1"
+
 // LMS needs a moment to act on a command before `status` reports the result.
 #define REFRESH_DELAY_MS 600
 
@@ -252,8 +263,10 @@ static void prv_on_touch(const TouchEvent *event, void *ctx) {
   const int ady = abs(dy);
 
   if (adx > ady && adx > SWIPE_MIN_PX) {
-    // Swiping left moves forward, the way a page turns.
-    prv_send(state, dx < 0 ? "button jump_fwd" : "button jump_rew");
+    // Right for the next track. The carousel reading -- drag the sleeve left to
+    // bring the next one on -- is the other common convention, so this is a
+    // one-line change if it ever feels wrong.
+    prv_send(state, dx > 0 ? TRACK_NEXT : TRACK_PREVIOUS);
   } else if (ady > adx && ady > SWIPE_MIN_PX) {
     prv_send(state, dy < 0 ? VOLUME_UP : VOLUME_DOWN);
   } else if (adx < TAP_MAX_PX && ady < TAP_MAX_PX) {
