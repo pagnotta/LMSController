@@ -365,6 +365,50 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
   }
 }
 
+// --- buttons ---------------------------------------------------------------
+
+static void prv_close_all(bool trim_to_folders);
+
+static void prv_click_up(ClickRecognizerRef recognizer, void *ctx) {
+  BrowseWindow *state = ctx;
+  menu_layer_set_selected_next(state->menu, true, MenuRowAlignCenter, true);
+}
+
+static void prv_click_down(ClickRecognizerRef recognizer, void *ctx) {
+  BrowseWindow *state = ctx;
+  menu_layer_set_selected_next(state->menu, false, MenuRowAlignCenter, true);
+}
+
+static void prv_click_select(ClickRecognizerRef recognizer, void *ctx) {
+  BrowseWindow *state = ctx;
+  MenuIndex index = menu_layer_get_selected_index(state->menu);
+  prv_select(state->menu, &index, state);
+}
+
+/**
+ * Hold Select to leave the tree in one go.
+ *
+ * Five levels down, getting back to the player meant five presses of Back if
+ * nothing had been started. The whole path is kept, not trimmed to the last
+ * folder level: nothing was played, so the user was in the middle of something
+ * and should come back to exactly where they stood.
+ */
+static void prv_click_select_long(ClickRecognizerRef recognizer, void *ctx) {
+  prv_close_all(false);
+}
+
+/**
+ * Built by hand rather than menu_layer_set_click_config_onto_window, which
+ * claims the whole window and leaves no room for the long press. Up and Down
+ * do what that function would have bound them to.
+ */
+static void prv_click_config(void *ctx) {
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, 100, prv_click_up);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, 100, prv_click_down);
+  window_single_click_subscribe(BUTTON_ID_SELECT, prv_click_select);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, prv_click_select_long, NULL);
+}
+
 // --- window ----------------------------------------------------------------
 
 static void prv_window_load(Window *window) {
@@ -382,7 +426,7 @@ static void prv_window_load(Window *window) {
       .selection_changed = prv_on_selection_changed,
   });
   ui_style_menu_layer(state->menu);
-  menu_layer_set_click_config_onto_window(state->menu, window);
+  window_set_click_config_provider_with_context(window, prv_click_config, state);
   layer_add_child(root, menu_layer_get_layer(state->menu));
 
   if (!s_restoring)
@@ -484,15 +528,24 @@ void browse_window_push_root(const char *player_id) {
     prv_load_page(s_levels[s_level_count - 1], 0);
 }
 
-void browse_close_all(void) {
-  // Snapshot before unwinding: this is the jump to the player, and coming back
-  // at the root is exactly what makes picking a second album tedious.
-  //
-  // See prv_level_has_folders for why the path stops where it does.
-  int keep = 0;
-  for (int i = 0; i < s_level_count && i < MAX_LEVELS; i++)
-    if (prv_level_has_folders(s_levels[i]))
-      keep = i + 1;
+/**
+ * Closes the tree, remembering the way back.
+ *
+ * `trim_to_folders` separates the two ways out. Playback jumps out of a track
+ * list or an options menu, and coming back to one of those would be useless --
+ * see prv_level_has_folders. Leaving by hand means the user was still looking
+ * around, so the path is kept whole.
+ */
+static void prv_close_all(bool trim_to_folders) {
+  // Snapshot before unwinding: coming back at the root is exactly what makes
+  // picking a second album tedious.
+  int keep = s_level_count < MAX_LEVELS ? s_level_count : MAX_LEVELS;
+  if (trim_to_folders) {
+    keep = 0;
+    for (int i = 0; i < s_level_count && i < MAX_LEVELS; i++)
+      if (prv_level_has_folders(s_levels[i]))
+        keep = i + 1;
+  }
 
   s_saved_depth = 0;
   for (int i = 0; i < keep; i++) {
@@ -517,4 +570,8 @@ void browse_close_all(void) {
   while (s_level_count > 0 && guard-- > 0)
     window_stack_remove(s_levels[s_level_count - 1]->window, false);
   s_closing = false;
+}
+
+void browse_close_all(void) {
+  prv_close_all(true);
 }
