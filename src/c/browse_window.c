@@ -33,19 +33,6 @@
 /** How close the cursor may come to an unloaded edge before we fetch. */
 #define PREFETCH_MARGIN 4
 
-/**
- * Levels dropped from the saved path when playback closes the menu.
- *
- * Playback is started from deep inside -- a track inside an album inside a
- * list of albums -- and what is wanted next is another album, which sits two
- * levels above the track. Tuned by use rather than derived: one level up still
- * left a folder to re-enter every time.
- *
- * Nothing is lost by dropping them. Each remaining level keeps the selection it
- * had, so the way back down is already under the cursor.
- */
-#define PATH_DROP_LEVELS 2
-
 typedef struct BrowseWindow {
   Window *window;
   MenuLayer *menu;
@@ -70,6 +57,31 @@ typedef struct BrowseWindow {
 
 static BrowseWindow *s_levels[MAX_LEVELS];
 static int s_level_count;
+
+/**
+ * How far back the saved path reaches: to the deepest level that still holds
+ * folders.
+ *
+ * A count of levels cannot work, because the depth playback is started from is
+ * not fixed. With something already playing, opening an album gives an options
+ * menu first -- play after this track, play everything now -- so the path is
+ * one level longer than when nothing is playing and a track starts straight
+ * away.
+ *
+ * What both have in common is the shape: a track list and an options menu
+ * consist only of things to play, while the album list above them is the last
+ * level anything can be navigated from. That is where the user wants to be, and
+ * kind already says which is which.
+ *
+ * This runs as playback closes the menu, so it reads the levels that were
+ * actually walked rather than guessing a depth from what is playing later.
+ */
+static bool prv_level_has_folders(const BrowseWindow *level) {
+  for (int i = 0; i < level->cache_count; i++)
+    if (level->cache[i].kind == LMSItemNode || level->cache[i].kind == LMSItemCmd)
+      return true;
+  return false;
+}
 
 /**
  * Where the user was when playback took them away.
@@ -476,9 +488,14 @@ void browse_close_all(void) {
   // Snapshot before unwinding: this is the jump to the player, and coming back
   // at the root is exactly what makes picking a second album tedious.
   //
-  // See PATH_DROP_LEVELS for why the last levels are left out.
+  // See prv_level_has_folders for why the path stops where it does.
+  int keep = 0;
+  for (int i = 0; i < s_level_count && i < MAX_LEVELS; i++)
+    if (prv_level_has_folders(s_levels[i]))
+      keep = i + 1;
+
   s_saved_depth = 0;
-  for (int i = 0; i < s_level_count - PATH_DROP_LEVELS && i < MAX_LEVELS; i++) {
+  for (int i = 0; i < keep; i++) {
     BrowseWindow *level = s_levels[i];
     strncpy(s_saved[i].req_id, level->req_id, sizeof(s_saved[i].req_id) - 1);
     s_saved[i].req_id[sizeof(s_saved[i].req_id) - 1] = '\0';
