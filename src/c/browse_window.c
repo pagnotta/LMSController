@@ -44,6 +44,22 @@
  */
 #define RETRY_MS 700
 
+/**
+ * Rows MenuLayer is told about at once.
+ *
+ * ScrollLayer keeps its content size in a GSize, whose fields are int16_t, so a
+ * list taller than 32767 px cannot be represented at all. At 42 px a row that
+ * is 780 rows; past it the height wraps negative, the layer decides there is
+ * nothing to scroll, and the selection simply walks off the bottom of the
+ * screen while the rows stay put. A library with 2770 albums hits this from the
+ * very first row.
+ *
+ * So the level is shown through a window of this many rows, which moves along
+ * when the cursor reaches either end. 600 leaves room on both screens: 25200 px
+ * on emery, and on gabbro 24028 with its one taller focused row.
+ */
+#define MAX_MENU_ROWS 600
+
 typedef struct BrowseWindow {
   Window *window;
   MenuLayer *menu;
@@ -57,6 +73,7 @@ typedef struct BrowseWindow {
   int cache_start;           //!< index of cache[0] within the level
   int cache_count;
   int total;                 //!< rows at this level, from the server
+  int row_offset;            //!< level index shown as MenuLayer row 0
 
   int requested_start;       //!< start of the fetch in flight
   AppTimer *retry_timer;     //!< set after a fetch that did not come back
@@ -138,16 +155,30 @@ static bool s_restoring;
 static void prv_push(const char *player_id, const char *req_id, bool node,
                      const char *title, uint16_t selected, bool restored);
 static void prv_load_page(BrowseWindow *state, int start);
+static void prv_shift_window(BrowseWindow *state, int wanted_index);
 
 static void prv_forget_path(void) {
   s_saved_depth = 0;
   s_saved_player[0] = '\0';
 }
 
-/** True when `row` is one of the items currently in memory. */
-static bool prv_row_loaded(const BrowseWindow *state, int row) {
-  return state->have_total && row >= state->cache_start &&
-         row < state->cache_start + state->cache_count;
+/** MenuLayer counts rows from the window's start; the level does not. */
+static int prv_level_index(const BrowseWindow *state, int row) {
+  return state->row_offset + row;
+}
+
+/** Rows in the window: the rest of the level, up to the window's size. */
+static uint16_t prv_window_rows(const BrowseWindow *state) {
+  const int left = state->total - state->row_offset;
+  if (left <= 0)
+    return 0;
+  return left < MAX_MENU_ROWS ? (uint16_t)left : MAX_MENU_ROWS;
+}
+
+/** True when this level index is one of the items currently in memory. */
+static bool prv_index_loaded(const BrowseWindow *state, int index) {
+  return state->have_total && index >= state->cache_start &&
+         index < state->cache_start + state->cache_count;
 }
 
 static int prv_cache_end(const BrowseWindow *state) {
@@ -227,9 +258,10 @@ static void prv_ensure_selection_loaded(BrowseWindow *state) {
   if (state->loading || !state->have_total || state->total == 0)
     return;
 
-  const int row = menu_layer_get_selected_index(state->menu).row;
+  const int row = prv_level_index(state,
+                                  menu_layer_get_selected_index(state->menu).row);
 
-  if (!prv_row_loaded(state, row)) {
+  if (!prv_index_loaded(state, row)) {
     prv_load_page(state, (row / LMS_PAGE) * LMS_PAGE);
     return;
   }
@@ -285,14 +317,20 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
   // walked off the bottom of the screen while the rows stayed put.
   MenuIndex selected = menu_layer_get_selected_index(state->menu);
 
-  menu_layer_reload_data(state->menu);
-
   // Reinstating a saved row has to wait for the total: before that the list has
-  // one message row and any index would be clamped to it.
+  // one message row and any index would be clamped to it. A saved row is a
+  // level index, so it may need the window moved to reach it.
   if (state->restore_row) {
-    selected = MenuIndex(0, state->restore_row);
+    const int wanted = state->restore_row;
     state->restore_row = 0;
+    if (wanted >= MAX_MENU_ROWS) {
+      prv_shift_window(state, wanted);
+      return;
+    }
+    selected = MenuIndex(0, wanted);
   }
+
+  menu_layer_reload_data(state->menu);
   menu_layer_set_selected_index(state->menu, selected, MenuRowAlignCenter, false);
 
   prv_ensure_selection_loaded(state);
@@ -311,7 +349,7 @@ static uint16_t prv_num_rows(MenuLayer *menu, uint16_t section, void *ctx) {
   BrowseWindow *state = ctx;
   if (!state->have_total || state->total == 0)
     return 1;  // the message row
-  return state->total;
+  return prv_window_rows(state);
 }
 
 static int16_t prv_header_height(MenuLayer *menu, uint16_t section, void *ctx) {
@@ -337,13 +375,14 @@ static void prv_draw_row(GContext *gctx, const Layer *cell, MenuIndex *index,
     ui_draw_menu_row(gctx, cell, state->message);
     return;
   }
-  if (!prv_row_loaded(state, index->row)) {
+  const int level_index = prv_level_index(state, index->row);
+  if (!prv_index_loaded(state, level_index)) {
     ui_draw_menu_row(gctx, cell, "...");
     return;
   }
 
   // "> " marks a folder, so a list mixing albums and tracks reads at a glance.
-  const LMSItem *item = &state->cache[index->row - state->cache_start];
+  const LMSItem *item = &state->cache[level_index - state->cache_start];
   const bool folder = item->kind == LMSItemNode || item->kind == LMSItemCmd;
   char line[LMS_TEXT_LEN + 3];
   snprintf(line, sizeof(line), "%s%s", folder ? "> " : "", item->text);
@@ -370,10 +409,11 @@ static void prv_on_played(const char *err, void *ctx) {
 
 static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
   BrowseWindow *state = ctx;
-  if (!prv_row_loaded(state, index->row))
+  const int level_index = prv_level_index(state, index->row);
+  if (!prv_index_loaded(state, level_index))
     return;
 
-  const LMSItem *item = &state->cache[index->row - state->cache_start];
+  const LMSItem *item = &state->cache[level_index - state->cache_start];
 
   switch (item->kind) {
     case LMSItemNode:
@@ -393,13 +433,50 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *ctx) {
 
 static void prv_close_all(bool trim_to_folders);
 
+/**
+ * Moves the window along and puts the cursor back where it was heading.
+ *
+ * Only ever at an end of the window, so the jump in the visible rows happens
+ * exactly where the user is already pushing against a boundary. Half a window
+ * at a time, so the same edge is not hit again immediately.
+ */
+static void prv_shift_window(BrowseWindow *state, int wanted_index) {
+  int offset = wanted_index - MAX_MENU_ROWS / 2;
+  if (offset > state->total - MAX_MENU_ROWS)
+    offset = state->total - MAX_MENU_ROWS;
+  if (offset < 0)
+    offset = 0;
+  if (offset == state->row_offset)
+    return;
+
+  state->row_offset = offset;
+  menu_layer_reload_data(state->menu);
+  menu_layer_set_selected_index(state->menu,
+                                MenuIndex(0, wanted_index - offset),
+                                MenuRowAlignCenter, false);
+  prv_ensure_selection_loaded(state);
+}
+
 static void prv_click_up(ClickRecognizerRef recognizer, void *ctx) {
   BrowseWindow *state = ctx;
+  const int row = menu_layer_get_selected_index(state->menu).row;
+
+  if (row == 0 && state->row_offset > 0) {
+    prv_shift_window(state, prv_level_index(state, row) - 1);
+    return;
+  }
   menu_layer_set_selected_next(state->menu, true, MenuRowAlignCenter, true);
 }
 
 static void prv_click_down(ClickRecognizerRef recognizer, void *ctx) {
   BrowseWindow *state = ctx;
+  const int row = menu_layer_get_selected_index(state->menu).row;
+
+  if (row + 1 >= prv_window_rows(state) &&
+      prv_level_index(state, row) + 1 < state->total) {
+    prv_shift_window(state, prv_level_index(state, row) + 1);
+    return;
+  }
   menu_layer_set_selected_next(state->menu, false, MenuRowAlignCenter, true);
 }
 
@@ -581,7 +658,8 @@ static void prv_close_all(bool trim_to_folders) {
     strncpy(s_saved[i].title, level->title, sizeof(s_saved[i].title) - 1);
     s_saved[i].title[sizeof(s_saved[i].title) - 1] = '\0';
     s_saved[i].node = level->node;
-    s_saved[i].selected = menu_layer_get_selected_index(level->menu).row;
+    s_saved[i].selected =
+        prv_level_index(level, menu_layer_get_selected_index(level->menu).row);
     s_saved_depth++;
   }
   if (s_saved_depth > 0) {
