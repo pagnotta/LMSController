@@ -33,6 +33,17 @@
 /** How close the cursor may come to an unloaded edge before we fetch. */
 #define PREFETCH_MARGIN 4
 
+/**
+ * How long to wait before asking again for a page that did not arrive.
+ *
+ * Scrolling hard through a long level runs the fetch, the prefetch and the
+ * status poll into the four request slots the relay has, and the loser comes
+ * back "busy". Without a retry the level then sat there with a cache nowhere
+ * near the screen, drawing the placeholder in every row until the selection
+ * happened to move again.
+ */
+#define RETRY_MS 700
+
 typedef struct BrowseWindow {
   Window *window;
   MenuLayer *menu;
@@ -48,6 +59,7 @@ typedef struct BrowseWindow {
   int total;                 //!< rows at this level, from the server
 
   int requested_start;       //!< start of the fetch in flight
+  AppTimer *retry_timer;     //!< set after a fetch that did not come back
   uint16_t restore_row;      //!< selection to reinstate once the level loads
   bool restored;             //!< came from the saved path, not from a tap
   bool have_total;
@@ -237,6 +249,12 @@ static void prv_ensure_selection_loaded(BrowseWindow *state) {
   }
 }
 
+static void prv_on_retry(void *ctx) {
+  BrowseWindow *state = ctx;
+  state->retry_timer = NULL;
+  prv_ensure_selection_loaded(state);
+}
+
 static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
   BrowseWindow *state = ctx;
   state->loading = false;
@@ -249,6 +267,8 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
     // these ids. Keeping the path would fail the same way every time.
     if (state->restored)
       prv_forget_path();
+    else if (!state->retry_timer)
+      state->retry_timer = app_timer_register(RETRY_MS, prv_on_retry, state);
     return;
   }
 
@@ -260,16 +280,20 @@ static void prv_on_page(const char *err, const LMSPage *page, void *ctx) {
   if (page->total == 0)
     strncpy(state->message, "Empty", sizeof(state->message) - 1);
 
+  // Keep the selection before reloading: reload_data lays the list out afresh
+  // and leaves the scroll offset where it was, so on a long level the highlight
+  // walked off the bottom of the screen while the rows stayed put.
+  MenuIndex selected = menu_layer_get_selected_index(state->menu);
+
   menu_layer_reload_data(state->menu);
 
-  // Reinstating the row has to wait for the total: before that the list has one
-  // message row and any index would be clamped to it.
+  // Reinstating a saved row has to wait for the total: before that the list has
+  // one message row and any index would be clamped to it.
   if (state->restore_row) {
-    menu_layer_set_selected_index(state->menu,
-                                  MenuIndex(0, state->restore_row), MenuRowAlignCenter,
-                                  false);
+    selected = MenuIndex(0, state->restore_row);
     state->restore_row = 0;
   }
+  menu_layer_set_selected_index(state->menu, selected, MenuRowAlignCenter, false);
 
   prv_ensure_selection_loaded(state);
 }
@@ -450,6 +474,8 @@ static void prv_window_disappear(Window *window) {
 static void prv_window_unload(Window *window) {
   BrowseWindow *state = window_get_user_data(window);
   lms_cancel(state);
+  if (state->retry_timer)
+    app_timer_cancel(state->retry_timer);
 
   for (int i = 0; i < s_level_count; i++) {
     if (s_levels[i] == state) {
